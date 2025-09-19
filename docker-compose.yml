@@ -1,0 +1,48 @@
+version: '3.8'
+
+services:
+  # RabbitMQ Server
+  rabbitmq:
+    image: rabbitmq:3.12-management
+    container_name: rabbitmq-server
+    ports:
+      - "5672:5672"    # AMQP port
+      - "15672:15672"  # Management UI
+    environment:
+      RABBITMQ_DEFAULT_USER: guest
+      RABBITMQ_DEFAULT_PASS: guest
+    networks:
+      - middleware-network
+    healthcheck:
+      test: ["CMD", "rabbitmq-diagnostics", "ping"]
+      interval: 30s
+      timeout: 10s
+      retries: 5
+    volumes:
+      - rabbitmq_data:/var/lib/rabbitmq
+
+  # Test Environment
+  test-env:
+    build:
+      context: .
+      dockerfile: Dockerfile.test
+    container_name: middleware-test
+    depends_on:
+      rabbitmq:
+        condition: service_healthy
+    environment:
+      - RABBITMQ_HOST=rabbitmq
+      - RABBITMQ_PORT=5672
+    networks:
+      - middleware-network
+    volumes:
+      - .:/app
+    working_dir: /app
+    command: ["python", "-m", "pytest", "tests/", "-v"]
+
+networks:
+  middleware-network:
+    driver: bridge
+
+volumes:
+  rabbitmq_data:

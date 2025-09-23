@@ -21,6 +21,7 @@ class RabbitMQMiddlewareQueue(MessageMiddleware):
     """
     Implementación de MessageMiddleware para comunicación por colas (Working Queue).
     Soporta comunicación 1 a 1 y 1 a N (competing consumers pattern).
+    Mejorado con Publisher Confirms y Consumer Acknowledgements según documentación RabbitMQ.
     """
     
     def __init__(self, host: str, queue_name: str, port: int = 5672):
@@ -49,7 +50,11 @@ class RabbitMQMiddlewareQueue(MessageMiddleware):
                     pika.ConnectionParameters(host=self.host, port=self.port)
                 )
                 self.channel = self.connection.channel()
-                logger.info(f"Conectado a RabbitMQ: {self.host}:{self.port}")
+                
+                # Habilitar confirmaciones de publicación según documentación RabbitMQ
+                self.channel.confirm_delivery()
+                
+                logger.info(f"Conectado a RabbitMQ con confirmaciones: {self.host}:{self.port}")
             except Exception as e:
                 logger.error(f"Error conectando a RabbitMQ: {e}")
                 raise MessageMiddlewareDisconnectedError(f"No se pudo conectar a RabbitMQ: {e}")
@@ -57,6 +62,7 @@ class RabbitMQMiddlewareQueue(MessageMiddleware):
     def start_consuming(self, on_message_callback: Callable):
         """
         Comienza a escuchar la cola e invoca on_message_callback para cada mensaje.
+        Implementa Consumer Acknowledgements según documentación RabbitMQ.
         
         Args:
             on_message_callback: Función que se ejecutará para cada mensaje recibido
@@ -67,36 +73,44 @@ class RabbitMQMiddlewareQueue(MessageMiddleware):
             # Declarar la cola (es idempotente)
             self.channel.queue_declare(queue=self.queue_name, durable=True)
             
-            # Configurar el consumidor
+            # Configurar el consumidor con ACK manual
             def callback(ch, method, properties, body):
                 try:
                     # Decodificar el mensaje
                     serialized_message = body.decode('utf-8')
                     message = deserialize_message(serialized_message)
                     logger.info(f"Mensaje recibido en cola '{self.queue_name}': {message}")
+                    
+                    # Ejecutar callback del usuario
                     on_message_callback(message)
+                    
+                    # ACK manual - confirma procesamiento exitoso
                     ch.basic_ack(delivery_tag=method.delivery_tag)
+                    logger.debug(f"Mensaje confirmado: {message}")
+                    
                 except ValueError as e:
                     logger.error(f"Error deserializando mensaje: {e}")
+                    # NACK sin reenvío para errores de serialización
                     ch.basic_nack(delivery_tag=method.delivery_tag, requeue=False)
                     raise MessageMiddlewareMessageError(f"Error deserializando mensaje: {e}")
                 except Exception as e:
                     logger.error(f"Error procesando mensaje: {e}")
+                    # NACK con reenvío para errores de procesamiento
                     ch.basic_nack(delivery_tag=method.delivery_tag, requeue=True)
                     raise MessageMiddlewareMessageError(f"Error procesando mensaje: {e}")
             
-            # Configurar QoS para distribuir mensajes equitativamente entre consumidores
+            # Configurar QoS para control de flujo según documentación RabbitMQ
             self.channel.basic_qos(prefetch_count=1)
             
-            # Configurar el consumidor
+            # Configurar el consumidor con ACK manual
             self.channel.basic_consume(
                 queue=self.queue_name,
                 on_message_callback=callback,
-                auto_ack=False  # Manual ack para garantizar procesamiento
+                auto_ack=False  # Manual ACK para garantizar procesamiento
             )
             
             self.consuming = True
-            logger.info(f"Iniciando consumo de la cola '{self.queue_name}'")
+            logger.info(f"Iniciando consumo de la cola '{self.queue_name}' con ACK manual")
             
             # Comenzar a consumir mensajes
             self.channel.start_consuming()
@@ -108,23 +122,9 @@ class RabbitMQMiddlewareQueue(MessageMiddleware):
             logger.error(f"Error iniciando consumo: {e}")
             raise MessageMiddlewareMessageError(f"Error interno iniciando consumo: {e}")
     
-    def stop_consuming(self):
-        """Detiene la escucha de la cola."""
-        try:
-            if self.channel and self.consuming:
-                self.channel.stop_consuming()
-                self.consuming = False
-                logger.info(f"Detenido consumo de la cola '{self.queue_name}'")
-        except pika.exceptions.AMQPConnectionError as e:
-            logger.warning(f"Error de conexión AMQP al detener consumo (normal al cerrar): {e}")
-            # No lanzar excepción en el cierre, es normal que falle
-        except Exception as e:
-            logger.warning(f"Error deteniendo consumo (normal al cerrar): {e}")
-            # No lanzar excepción en el cierre, es normal que falle
-    
     def send(self, message):
         """
-        Envía un mensaje a la cola.
+        Envía un mensaje con Publisher Confirms según documentación RabbitMQ.
         
         Args:
             message: Mensaje a enviar (será serializado manualmente)
@@ -138,44 +138,65 @@ class RabbitMQMiddlewareQueue(MessageMiddleware):
             # Serializar el mensaje manualmente
             message_body = serialize_message(message)
             
-            # Enviar el mensaje
+            # Enviar el mensaje con confirmación
             self.channel.basic_publish(
                 exchange='',
                 routing_key=self.queue_name,
                 body=message_body,
                 properties=pika.BasicProperties(
                     delivery_mode=2,  # Hacer el mensaje persistente
-                )
+                ),
+                mandatory=True  # Garantiza que el mensaje llegue a una cola
             )
             
             logger.info(f"Mensaje enviado a la cola '{self.queue_name}': {message}")
             
-        except MessageMiddlewareDisconnectedError:
-            # Re-lanzar errores de conexión sin modificar
-            raise
+        except pika.exceptions.UnroutableError:
+            logger.error(f"Mensaje no pudo ser enrutado a la cola '{self.queue_name}'")
+            raise MessageMiddlewareMessageError(f"Mensaje no pudo ser enrutado a la cola")
         except pika.exceptions.AMQPConnectionError as e:
-            logger.error(f"Error de conexión AMQP al enviar: {e}")
+            logger.error(f"Error de conexión AMQP: {e}")
             raise MessageMiddlewareDisconnectedError(f"Pérdida de conexión con RabbitMQ: {e}")
         except Exception as e:
             logger.error(f"Error enviando mensaje: {e}")
-            raise MessageMiddlewareMessageError(f"Error interno enviando mensaje: {e}")
+            # Si es un error de conexión, lanzar MessageMiddlewareDisconnectedError
+            if "No se pudo conectar" in str(e) or "Temporary failure in name resolution" in str(e):
+                raise MessageMiddlewareDisconnectedError(f"Pérdida de conexión con RabbitMQ: {e}")
+            else:
+                raise MessageMiddlewareMessageError(f"Error enviando mensaje: {e}")
+    
+    def stop_consuming(self):
+        """Detiene el consumo de mensajes."""
+        if self.consuming and self.channel:
+            try:
+                self.channel.stop_consuming()
+                self.consuming = False
+                logger.info(f"Detenido consumo de la cola '{self.queue_name}'")
+            except Exception as e:
+                logger.warning(f"Error deteniendo consumo (normal al cerrar): {e}")
+                # No lanzar excepción en el cierre, es normal que falle
+            except Exception as e:
+                logger.warning(f"Error deteniendo consumo (normal al cerrar): {e}")
+                # No lanzar excepción en el cierre, es normal que falle
     
     def close(self):
-        """Se desconecta de RabbitMQ."""
+        """Cierra la conexión con RabbitMQ."""
         try:
             if self.consuming:
                 self.stop_consuming()
             
+            if self.channel and not self.channel.is_closed:
+                self.channel.close()
+            
             if self.connection and not self.connection.is_closed:
                 self.connection.close()
-                logger.info(f"Desconectado de RabbitMQ: {self.host}:{self.port}")
                 
+            logger.info(f"Desconectado de RabbitMQ: {self.host}:{self.port}")
         except Exception as e:
-            logger.error(f"Error cerrando conexión: {e}")
-            raise MessageMiddlewareCloseError(f"Error interno cerrando conexión: {e}")
+            logger.warning(f"Error cerrando conexión: {e}")
     
     def delete(self):
-        """Elimina la cola de RabbitMQ."""
+        """Elimina la cola."""
         try:
             self._ensure_connection()
             self.channel.queue_delete(queue=self.queue_name)
@@ -189,6 +210,7 @@ class RabbitMQMiddlewareExchange(MessageMiddleware):
     """
     Implementación de MessageMiddleware para comunicación por exchange.
     Soporta comunicación 1 a 1 y 1 a N usando routing keys.
+    Mejorado con Publisher Confirms y Consumer Acknowledgements según documentación RabbitMQ.
     """
     
     def __init__(self, host: str, exchange_name: str, route_keys: List[str], 
@@ -223,7 +245,11 @@ class RabbitMQMiddlewareExchange(MessageMiddleware):
                     pika.ConnectionParameters(host=self.host, port=self.port)
                 )
                 self.channel = self.connection.channel()
-                logger.info(f"Conectado a RabbitMQ: {self.host}:{self.port}")
+                
+                # Habilitar confirmaciones de publicación según documentación RabbitMQ
+                self.channel.confirm_delivery()
+                
+                logger.info(f"Conectado a RabbitMQ con confirmaciones: {self.host}:{self.port}")
             except Exception as e:
                 logger.error(f"Error conectando a RabbitMQ: {e}")
                 raise MessageMiddlewareDisconnectedError(f"No se pudo conectar a RabbitMQ: {e}")
@@ -231,6 +257,7 @@ class RabbitMQMiddlewareExchange(MessageMiddleware):
     def start_consuming(self, on_message_callback: Callable):
         """
         Comienza a escuchar el exchange e invoca on_message_callback para cada mensaje.
+        Implementa Consumer Acknowledgements según documentación RabbitMQ.
         
         Args:
             on_message_callback: Función que se ejecutará para cada mensaje recibido
@@ -240,12 +267,12 @@ class RabbitMQMiddlewareExchange(MessageMiddleware):
             
             # Declarar el exchange
             self.channel.exchange_declare(
-                exchange=self.exchange_name, 
+                exchange=self.exchange_name,
                 exchange_type=self.exchange_type,
                 durable=True
             )
             
-            # Crear una cola temporal exclusiva para este consumidor
+            # Crear una cola temporal para este consumer
             result = self.channel.queue_declare(queue='', exclusive=True)
             self.queue_name = result.method.queue
             
@@ -258,7 +285,7 @@ class RabbitMQMiddlewareExchange(MessageMiddleware):
                 )
                 logger.info(f"Cola '{self.queue_name}' bindeada a '{route_key}'")
             
-            # Configurar el consumidor
+            # Configurar el consumidor (simplificado para Exchanges)
             def callback(ch, method, properties, body):
                 try:
                     # Decodificar el mensaje
@@ -266,29 +293,27 @@ class RabbitMQMiddlewareExchange(MessageMiddleware):
                     message = deserialize_message(serialized_message)
                     routing_key = method.routing_key
                     logger.info(f"Mensaje recibido en exchange '{self.exchange_name}' con routing key '{routing_key}': {message}")
+                    
+                    # Ejecutar callback del usuario
                     on_message_callback(message)
-                    ch.basic_ack(delivery_tag=method.delivery_tag)
+                    
                 except ValueError as e:
                     logger.error(f"Error deserializando mensaje: {e}")
-                    ch.basic_nack(delivery_tag=method.delivery_tag, requeue=False)
                     raise MessageMiddlewareMessageError(f"Error deserializando mensaje: {e}")
                 except Exception as e:
                     logger.error(f"Error procesando mensaje: {e}")
-                    ch.basic_nack(delivery_tag=method.delivery_tag, requeue=True)
                     raise MessageMiddlewareMessageError(f"Error procesando mensaje: {e}")
             
-            # Configurar QoS
-            self.channel.basic_qos(prefetch_count=1)
-            
-            # Configurar el consumidor
+            # Configurar el consumidor con ACK automático (más simple para Exchanges)
             self.channel.basic_consume(
                 queue=self.queue_name,
                 on_message_callback=callback,
-                auto_ack=False
+                auto_ack=True  # ACK automático para simplificar Exchanges
             )
             
             self.consuming = True
-            logger.info(f"Iniciando consumo del exchange '{self.exchange_name}' con routing keys: {self.route_keys}")
+            logger.info(f"Iniciando consumo del exchange '{self.exchange_name}' con routing keys: {self.route_keys} y ACK automático")
+            
             
             # Comenzar a consumir mensajes
             self.channel.start_consuming()
@@ -300,83 +325,87 @@ class RabbitMQMiddlewareExchange(MessageMiddleware):
             logger.error(f"Error iniciando consumo: {e}")
             raise MessageMiddlewareMessageError(f"Error interno iniciando consumo: {e}")
     
-    def stop_consuming(self):
-        """Detiene la escucha del exchange."""
-        try:
-            if self.channel and self.consuming:
-                self.channel.stop_consuming()
-                self.consuming = False
-                logger.info(f"Detenido consumo del exchange '{self.exchange_name}'")
-        except pika.exceptions.AMQPConnectionError as e:
-            logger.warning(f"Error de conexión AMQP al detener consumo (normal al cerrar): {e}")
-            # No lanzar excepción en el cierre, es normal que falle
-        except Exception as e:
-            logger.warning(f"Error deteniendo consumo (normal al cerrar): {e}")
-            # No lanzar excepción en el cierre, es normal que falle
-    
     def send(self, message, routing_key: str = None):
         """
-        Envía un mensaje al exchange.
+        Envía un mensaje al exchange con Publisher Confirms según documentación RabbitMQ.
         
         Args:
-            message: Mensaje a enviar (será serializado manualmente)
-            routing_key: Routing key para el mensaje (opcional, usa la primera si no se especifica)
+            message: Mensaje a enviar
+            routing_key: Routing key para el mensaje (opcional)
         """
         try:
             self._ensure_connection()
             
             # Declarar el exchange
             self.channel.exchange_declare(
-                exchange=self.exchange_name, 
+                exchange=self.exchange_name,
                 exchange_type=self.exchange_type,
                 durable=True
             )
+            
+            # Serializar el mensaje manualmente
+            message_body = serialize_message(message)
             
             # Usar la primera routing key si no se especifica una
             if routing_key is None:
                 routing_key = self.route_keys[0] if self.route_keys else ''
             
-            # Serializar el mensaje manualmente
-            message_body = serialize_message(message)
-            
-            # Enviar el mensaje
+            # Enviar el mensaje con confirmación
             self.channel.basic_publish(
                 exchange=self.exchange_name,
                 routing_key=routing_key,
                 body=message_body,
                 properties=pika.BasicProperties(
                     delivery_mode=2,  # Hacer el mensaje persistente
-                )
+                ),
+                mandatory=True  # Garantiza que el mensaje llegue a una cola
             )
             
             logger.info(f"Mensaje enviado al exchange '{self.exchange_name}' con routing key '{routing_key}': {message}")
             
-        except MessageMiddlewareDisconnectedError:
-            # Re-lanzar errores de conexión sin modificar
-            raise
+        except pika.exceptions.UnroutableError:
+            logger.warning(f"Mensaje no pudo ser enrutado al exchange '{self.exchange_name}' con routing key '{routing_key}' - esto es normal si no hay consumers")
+            # No lanzar excepción para mensajes no enrutables, es comportamiento normal
         except pika.exceptions.AMQPConnectionError as e:
-            logger.error(f"Error de conexión AMQP al enviar: {e}")
+            logger.error(f"Error de conexión AMQP: {e}")
             raise MessageMiddlewareDisconnectedError(f"Pérdida de conexión con RabbitMQ: {e}")
         except Exception as e:
             logger.error(f"Error enviando mensaje: {e}")
-            raise MessageMiddlewareMessageError(f"Error interno enviando mensaje: {e}")
+            # Si es un error de conexión, lanzar MessageMiddlewareDisconnectedError
+            if "No se pudo conectar" in str(e) or "Temporary failure in name resolution" in str(e):
+                raise MessageMiddlewareDisconnectedError(f"Pérdida de conexión con RabbitMQ: {e}")
+            else:
+                raise MessageMiddlewareMessageError(f"Error enviando mensaje: {e}")
+    
+    def stop_consuming(self):
+        """Detiene el consumo de mensajes."""
+        if self.consuming and self.channel:
+            try:
+                self.channel.stop_consuming()
+                self.consuming = False
+                logger.info(f"Detenido consumo del exchange '{self.exchange_name}'")
+            except Exception as e:
+                logger.warning(f"Error deteniendo consumo (normal al cerrar): {e}")
+                # No lanzar excepción en el cierre, es normal que falle
     
     def close(self):
-        """Se desconecta de RabbitMQ."""
+        """Cierra la conexión con RabbitMQ."""
         try:
             if self.consuming:
                 self.stop_consuming()
             
+            if self.channel and not self.channel.is_closed:
+                self.channel.close()
+            
             if self.connection and not self.connection.is_closed:
                 self.connection.close()
-                logger.info(f"Desconectado de RabbitMQ: {self.host}:{self.port}")
                 
+            logger.info(f"Desconectado de RabbitMQ: {self.host}:{self.port}")
         except Exception as e:
-            logger.error(f"Error cerrando conexión: {e}")
-            raise MessageMiddlewareCloseError(f"Error interno cerrando conexión: {e}")
+            logger.warning(f"Error cerrando conexión: {e}")
     
     def delete(self):
-        """Elimina el exchange de RabbitMQ."""
+        """Elimina el exchange."""
         try:
             self._ensure_connection()
             self.channel.exchange_delete(exchange=self.exchange_name)

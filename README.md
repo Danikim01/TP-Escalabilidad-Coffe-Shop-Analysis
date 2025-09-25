@@ -1,120 +1,206 @@
-# Middleware de RabbitMQ para Sistemas Distribuidos
+# Coffee Shop Analysis - Sistema de Procesamiento Distribuido
 
-Este proyecto implementa un middleware de comunicación basado en RabbitMQ siguiendo la interfaz proporcionada por la cátedra. El middleware soporta diferentes patrones de comunicación para sistemas distribuidos.
+Este proyecto implementa un sistema de procesamiento distribuido para analizar datos de transacciones de una cafetería usando RabbitMQ como middleware de mensajería.
 
-## Instalación
+## Query Implementada
+
+**Transacciones (Id y monto) realizadas durante 2024 y 2025 entre las 06:00 AM y las 11:00 PM con monto total mayor o igual a 75.**
+
+## Arquitectura del Sistema
+
+### Componentes
+
+1. **Cliente**: Envía datos CSV al gateway mediante sockets TCP
+2. **Gateway**: Recibe datos del cliente y los envía a RabbitMQ
+3. **Workers Especializados**:
+   - **Year Filter Worker**: Filtra transacciones por año (2024, 2025)
+   - **Time Filter Worker**: Filtra transacciones por hora (06:00 AM - 11:00 PM)
+   - **Amount Filter Worker**: Filtra transacciones por monto (>= $75)
+   - **Results Worker**: Muestra los resultados finales
+
+### Flujo de Datos
+
+```
+Cliente → Gateway → RabbitMQ → Year Filter → Time Filter → Amount Filter → Results
+```
+
+## Estructura de Archivos
+
+```
+src/
+├── client/                 # Cliente que envía datos CSV
+├── gateway/               # Gateway que recibe datos y los envía a RabbitMQ
+├── workers/               # Workers especializados
+│   ├── year_filter_worker.py
+│   ├── time_filter_worker.py
+│   ├── amount_filter_worker.py
+│   ├── results_worker.py
+│   └── start_workers.py
+└── middleware/            # Middleware RabbitMQ
+    └── rabbitmq_middleware.py
+```
+
+## Instalación y Uso
 
 ### Prerrequisitos
 
 - Docker y Docker Compose
 - Python 3.11+
 
-### Configuración
+### Ejecutar el Sistema
 
-1. Clonar el repositorio
-2. Instalar dependencias:
-   ```bash
-   pip install -r requirements.txt
-   ```
-
-## Uso
-
-### Ejecutar RabbitMQ con Docker
-
+1. **Iniciar todos los servicios**:
 ```bash
-# Iniciar RabbitMQ
-docker-compose up rabbitmq -d
+docker-compose up --build
+```
 
-# Verificar que esté funcionando
+2. **Verificar que todos los servicios estén funcionando**:
+```bash
 docker-compose ps
 ```
 
-### Demostración Manual
+3. **Ver logs de los workers**:
+```bash
+# Ver logs de todos los workers
+docker-compose logs -f
+
+# Ver logs de un worker específico
+docker-compose logs -f year-filter-worker
+docker-compose logs -f time-filter-worker
+docker-compose logs -f amount-filter-worker
+docker-compose logs -f results-worker
+```
+
+### Probar el Sistema
+
+1. **Colocar archivos CSV en la carpeta de datos**:
+```bash
+# Crear estructura de carpetas
+mkdir -p src/client/.data/transactions
+mkdir -p src/client/.data/users
+mkdir -p src/client/.data/transaction_items
+
+# Colocar archivos CSV en las carpetas correspondientes
+# - transactions_202307.csv en src/client/.data/transactions/
+# - users_202307.csv en src/client/.data/users/
+# - transaction_items_202307.csv en src/client/.data/transaction_items/
+```
+
+2. **El cliente se ejecutará automáticamente** y enviará los datos al gateway.
+
+3. **Los workers procesarán las transacciones** y mostrarán los resultados.
+
+## Configuración
+
+### Variables de Entorno
+
+- `RABBITMQ_HOST`: Host de RabbitMQ (default: localhost)
+- `RABBITMQ_PORT`: Puerto de RabbitMQ (default: 5672)
+- `GATEWAY_HOST`: Host del gateway (default: localhost)
+- `GATEWAY_PORT`: Puerto del gateway (default: 12345)
+
+### Colas de RabbitMQ
+
+- `transactions_raw`: Cola de entrada para transacciones
+- `transactions_year_filtered`: Cola intermedia después del filtro de año
+- `transactions_time_filtered`: Cola intermedia después del filtro de hora
+- `transactions_final_results`: Cola final con resultados
+
+## Desarrollo
+
+### Ejecutar Workers Individualmente
 
 ```bash
-# Ejecutar script de demostración
-python demo_middleware.py
+# Navegar a la carpeta de workers
+cd src/workers
+
+# Instalar dependencias
+pip install -r requirements.txt
+
+# Ejecutar un worker específico
+python year_filter_worker.py
+python time_filter_worker.py
+python amount_filter_worker.py
+python results_worker.py
+
+# O ejecutar todos los workers
+python start_workers.py
 ```
 
-### Ejecutar Pruebas
+### Estructura de Datos
 
-```bash
-# Ejecutar todas las pruebas
-./run_tests.sh
-
-# O ejecutar manualmente
-docker-compose run --rm test-env
+#### Transacciones
+```json
+{
+  "transaction_id": "string",
+  "store_id": "int",
+  "payment_method_id": "int", 
+  "voucher_id": "string",
+  "user_id": "int",
+  "original_amount": "float",
+  "discount_applied": "float",
+  "final_amount": "float",
+  "created_at": "YYYY-MM-DD HH:MM:SS"
+}
 ```
 
-## Patrones de Comunicación Soportados
-
-### 1. Working Queue 1 a 1
-
-```python
-from middleware import RabbitMQMiddlewareQueue
-
-# Producer
-producer = RabbitMQMiddlewareQueue("localhost", "mi_cola")
-producer.send({"mensaje": "Hola mundo"})
-
-# Consumer
-consumer = RabbitMQMiddlewareQueue("localhost", "mi_cola")
-def callback(mensaje):
-    print(f"Recibido: {mensaje}")
-
-consumer.start_consuming(callback)
-```
-
-### 2. Working Queue 1 a N (Competing Consumers)
-
-```python
-# Múltiples consumers compitiendo por mensajes de la misma cola
-consumer1 = RabbitMQMiddlewareQueue("localhost", "mi_cola")
-consumer2 = RabbitMQMiddlewareQueue("localhost", "mi_cola")
-consumer3 = RabbitMQMiddlewareQueue("localhost", "mi_cola")
-
-# Cada consumer procesará mensajes de forma distribuida
-```
-
-### 3. Exchange 1 a 1
-
-```python
-from middleware import RabbitMQMiddlewareExchange
-
-# Producer
-producer = RabbitMQMiddlewareExchange("localhost", "mi_exchange", ["routing_key"])
-producer.send({"mensaje": "Hola mundo"}, "routing_key")
-
-# Consumer
-consumer = RabbitMQMiddlewareExchange("localhost", "mi_exchange", ["routing_key"])
-def callback(mensaje):
-    print(f"Recibido: {mensaje}")
-
-consumer.start_consuming(callback)
-```
-
-### 4. Exchange 1 a N
-
-```python
-# Múltiples consumers con diferentes routing keys
-consumer1 = RabbitMQMiddlewareExchange("localhost", "mi_exchange", ["route1"])
-consumer2 = RabbitMQMiddlewareExchange("localhost", "mi_exchange", ["route2"])
-consumer3 = RabbitMQMiddlewareExchange("localhost", "mi_exchange", ["route1", "route2"])
-
-# Enviar mensajes a diferentes routing keys
-producer.send({"mensaje": "Para route1"}, "route1")
-producer.send({"mensaje": "Para route2"}, "route2")
+#### Resultados Finales
+```json
+{
+  "transaction_id": "string",
+  "final_amount": "float",
+  "original_amount": "float", 
+  "discount_applied": "float",
+  "created_at": "YYYY-MM-DD HH:MM:SS"
+}
 ```
 
 ## Monitoreo
 
-Accede a la interfaz de gestión de RabbitMQ en:
-- URL: http://localhost:15672
+### RabbitMQ Management UI
+
+Acceder a http://localhost:15672 para monitorear las colas y mensajes.
+
 - Usuario: guest
 - Contraseña: guest
 
-## Referencias
+### Logs del Sistema
 
-- [Tutoriales oficiales de RabbitMQ](https://www.rabbitmq.com/tutorials)
-- [Documentación de Pika](https://pika.readthedocs.io/)
-- [Patrones de integración empresarial](http://www.enterpriseintegrationpatterns.com/)
+```bash
+# Ver todos los logs
+docker-compose logs -f
+
+# Ver logs de un servicio específico
+docker-compose logs -f gateway
+docker-compose logs -f client
+docker-compose logs -f year-filter-worker
+```
+
+## Troubleshooting
+
+### Problemas Comunes
+
+1. **Workers no se conectan a RabbitMQ**:
+   - Verificar que RabbitMQ esté funcionando: `docker-compose logs rabbitmq`
+   - Verificar variables de entorno
+
+2. **No se procesan transacciones**:
+   - Verificar que el cliente esté enviando datos
+   - Verificar logs del gateway
+
+3. **No se muestran resultados**:
+   - Verificar que los workers estén funcionando
+   - Verificar logs de cada worker
+
+### Limpiar el Sistema
+
+```bash
+# Detener todos los servicios
+docker-compose down
+
+# Limpiar volúmenes
+docker-compose down -v
+
+# Reconstruir imágenes
+docker-compose up --build --force-recreate
+```

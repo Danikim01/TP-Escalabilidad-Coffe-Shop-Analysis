@@ -1,11 +1,13 @@
 import socket
 import logging
 import threading
+import os
 from typing import Dict, Set
 from protocol import (
     MessageType, DataType, send_response, receive_message, 
     parse_batch_message, parse_eof_message
 )
+from middleware.rabbitmq_middleware import RabbitMQMiddlewareQueue
 
 # Configure logging
 logging.basicConfig(
@@ -29,11 +31,19 @@ class CoffeeShopGateway:
             DataType.TRANSACTIONS: False,
             DataType.TRANSACTION_ITEMS: False
         }
-        self.stats = {
-            DataType.USERS: 0,
-            DataType.TRANSACTIONS: 0,
-            DataType.TRANSACTION_ITEMS: 0
-        }
+        
+        # Configurar RabbitMQ para enviar transacciones a workers
+        self.rabbitmq_host = os.getenv('RABBITMQ_HOST', 'localhost')
+        self.rabbitmq_port = int(os.getenv('RABBITMQ_PORT', 5672))
+        
+        # Middleware para enviar transacciones a la cola de procesamiento
+        self.transactions_queue = RabbitMQMiddlewareQueue(
+            host=self.rabbitmq_host,
+            queue_name='transactions_raw',
+            port=self.rabbitmq_port
+        )
+        
+        logger.info(f"Gateway configurado con RabbitMQ: {self.rabbitmq_host}:{self.rabbitmq_port}")
     
     def start_server(self):
         """Start the gateway server"""
@@ -116,12 +126,18 @@ class CoffeeShopGateway:
         try:
             data_type, rows = parse_batch_message(message_data)
             
-            # Store the data
-            self.data_storage[data_type].extend(rows)
-            self.stats[data_type] += len(rows)
+            logger.info(f"Received batch: type={data_type.name}, size={len(rows)}")
             
-            logger.info(f"Received batch: type={data_type.name}, size={len(rows)}, "
-                       f"total={self.stats[data_type]}")
+            # Si son transacciones, enviarlas a la cola de procesamiento
+            if data_type == DataType.TRANSACTIONS:
+                logger.info(f"Enviando {len(rows)} transacciones a la cola de procesamiento")
+                try:
+                    # Enviar cada transacción individualmente a la cola
+                    for transaction in rows:
+                        self.transactions_queue.send(transaction)
+                    logger.info(f"Enviadas {len(rows)} transacciones a la cola de procesamiento")
+                except Exception as e:
+                    logger.error(f"Error enviando transacciones a RabbitMQ: {e}")
             
             # Send success response
             send_response(client_socket, True)
@@ -137,8 +153,7 @@ class CoffeeShopGateway:
             
             if not self.eof_received[data_type]:
                 self.eof_received[data_type] = True
-                logger.info(f"Received EOF for {data_type.name}. "
-                           f"Total rows received: {self.stats[data_type]}")
+                logger.info(f"Received EOF for {data_type.name}.")
             else:
                 logger.warning(f"Duplicate EOF received for {data_type.name}")
             
@@ -148,10 +163,6 @@ class CoffeeShopGateway:
         except Exception as e:
             logger.error(f"Failed to process EOF message: {e}")
             send_response(client_socket, False)
-    
-    def get_data(self, data_type: DataType):
-        """Get stored data for a specific type"""
-        return self.data_storage[data_type].copy()
     
 def main():
     """Entry point"""

@@ -90,16 +90,20 @@ def serialize_transaction(row: Dict[str, Any]) -> bytes:
     data += pack_float32(voucher_id)
     
     # user_id (int)
-    data += pack_uint32(int(float(row['user_id'])))
+    user_id = int(float(row['user_id'])) if row['user_id'] else 0
+    data += pack_uint32(user_id)
     
     # original_amount (float)
-    data += pack_float32(float(row['original_amount']))
+    original_amount = float(row['original_amount']) if row['original_amount'] else 0.0
+    data += pack_float32(original_amount)
     
     # discount_applied (float)
-    data += pack_float32(float(row['discount_applied']))
+    discount_applied = float(row['discount_applied']) if row['discount_applied'] else 0.0
+    data += pack_float32(discount_applied)
     
     # final_amount (float)
-    data += pack_float32(float(row['final_amount']))
+    final_amount = float(row['final_amount']) if row['final_amount'] else 0.0
+    data += pack_float32(final_amount)
     
     # created_at (string)
     data += pack_string(row['created_at'])

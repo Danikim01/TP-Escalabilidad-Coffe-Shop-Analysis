@@ -1,10 +1,10 @@
-# Gateway
 FROM python:3.11-slim
 
+# Set working directory
 WORKDIR /app
 
 # Copy requirements first for better caching
-COPY src/gateway/requirements.txt .
+COPY src/workers/requirements.txt .
 
 # Install dependencies
 RUN pip install --no-cache-dir -r requirements.txt
@@ -12,16 +12,11 @@ RUN pip install --no-cache-dir -r requirements.txt
 # Copy middleware
 COPY middleware ./middleware
 
-# Copy gateway source code
-COPY src/gateway/ .
+# Copy workers source code
+COPY src/workers/ .
 
 # Set Python path
 ENV PYTHONPATH=/app
 
-RUN groupadd -r appuser && useradd -r -g appuser appuser
-RUN chown -R appuser:appuser /app
-USER appuser
-
-EXPOSE 12345
-
-CMD ["python", "main.py"]
+# Default command (can be overridden)
+CMD ["python", "year_filter_worker.py"]

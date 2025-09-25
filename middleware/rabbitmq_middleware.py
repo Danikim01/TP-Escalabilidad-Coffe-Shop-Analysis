@@ -55,7 +55,7 @@ class RabbitMQMiddlewareQueue(MessageMiddleware):
     Mejorado con Publisher Confirms y Consumer Acknowledgements según documentación RabbitMQ.
     """
     
-    def __init__(self, host: str, queue_name: str, port: int = 5672):
+    def __init__(self, host: str, queue_name: str, port: int = 5672, prefetch_count: int = 10):
         """
         Inicializa el middleware para comunicación por cola.
         
@@ -63,10 +63,12 @@ class RabbitMQMiddlewareQueue(MessageMiddleware):
             host: Host de RabbitMQ
             queue_name: Nombre de la cola
             port: Puerto de RabbitMQ (por defecto 5672)
+            prefetch_count: Número de mensajes a prefetch (por defecto 10)
         """
         self.host = host
         self.port = port
         self.queue_name = queue_name
+        self.prefetch_count = prefetch_count
         self.connection: Optional[pika.BlockingConnection] = None
         self.channel: Optional[pika.channel.Channel] = None
         self.consuming = False
@@ -104,35 +106,31 @@ class RabbitMQMiddlewareQueue(MessageMiddleware):
             # Declarar la cola (es idempotente)
             self.channel.queue_declare(queue=self.queue_name, durable=True)
             
-            # Configurar el consumidor con ACK manual
+            # Configurar el consumidor con ACK optimizado para chunks
             def callback(ch, method, properties, body):
                 try:
                     # Decodificar el mensaje
                     serialized_message = body.decode('utf-8')
                     message = deserialize_message(serialized_message)
-                    #logger.info(f"Mensaje recibido en cola '{self.queue_name}': {message}")
                     
                     # Ejecutar callback del usuario
                     on_message_callback(message)
                     
-                    # ACK manual - confirma procesamiento exitoso
+                    # ACK manual optimizado - confirma procesamiento exitoso
                     ch.basic_ack(delivery_tag=method.delivery_tag)
-                    ##logger.debug(f"Mensaje confirmado: {message}")
                     
                 except ValueError as e:
-                    #logger.error(f"Error deserializando mensaje: {e}")
                     # NACK sin reenvío para errores de serialización
                     ch.basic_nack(delivery_tag=method.delivery_tag, requeue=False)
                     raise MessageMiddlewareMessageError(f"Error deserializando mensaje: {e}")
                 except Exception as e:
-                    #logger.error(f"Error procesando mensaje: {e}")
                     # NACK con reenvío para errores de procesamiento
                     ch.basic_nack(delivery_tag=method.delivery_tag, requeue=True)
                     raise MessageMiddlewareMessageError(f"Error procesando mensaje: {e}")
             
             # Configurar QoS para control de flujo optimizado para múltiples workers
-            # Prefetch más alto para mejor load balancing entre workers
-            self.channel.basic_qos(prefetch_count=10)
+            # Prefetch configurable para mejor load balancing entre workers
+            self.channel.basic_qos(prefetch_count=self.prefetch_count)
             
             # Configurar el consumidor con ACK manual
             self.channel.basic_consume(

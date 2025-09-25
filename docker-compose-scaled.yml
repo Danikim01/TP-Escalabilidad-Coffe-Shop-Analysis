@@ -37,6 +37,7 @@ services:
     environment:
       - RABBITMQ_HOST=rabbitmq
       - RABBITMQ_PORT=5672
+      - CHUNK_SIZE=100
     restart: unless-stopped
 
   # Client Service
@@ -71,7 +72,7 @@ services:
       - RABBITMQ_HOST=rabbitmq
       - RABBITMQ_PORT=5672
       - WORKER_ID=1
-      - PREFETCH_COUNT=20
+      - PREFETCH_COUNT=50
     command: ["python", "year_filter_worker.py"]
     restart: unless-stopped
 
@@ -89,7 +90,7 @@ services:
       - RABBITMQ_HOST=rabbitmq
       - RABBITMQ_PORT=5672
       - WORKER_ID=2
-      - PREFETCH_COUNT=20
+      - PREFETCH_COUNT=50
     command: ["python", "year_filter_worker.py"]
     restart: unless-stopped
 
@@ -108,7 +109,7 @@ services:
       - RABBITMQ_HOST=rabbitmq
       - RABBITMQ_PORT=5672
       - WORKER_ID=1
-      - PREFETCH_COUNT=20
+      - PREFETCH_COUNT=50
     command: ["python", "time_filter_worker.py"]
     restart: unless-stopped
 
@@ -126,7 +127,7 @@ services:
       - RABBITMQ_HOST=rabbitmq
       - RABBITMQ_PORT=5672
       - WORKER_ID=2
-      - PREFETCH_COUNT=20
+      - PREFETCH_COUNT=50
     command: ["python", "time_filter_worker.py"]
     restart: unless-stopped
 
@@ -145,7 +146,7 @@ services:
       - RABBITMQ_HOST=rabbitmq
       - RABBITMQ_PORT=5672
       - WORKER_ID=1
-      - PREFETCH_COUNT=20
+      - PREFETCH_COUNT=50
     command: ["python", "amount_filter_worker.py"]
     restart: unless-stopped
 
@@ -163,7 +164,7 @@ services:
       - RABBITMQ_HOST=rabbitmq
       - RABBITMQ_PORT=5672
       - WORKER_ID=2
-      - PREFETCH_COUNT=20
+      - PREFETCH_COUNT=50
     command: ["python", "amount_filter_worker.py"]
     restart: unless-stopped
 

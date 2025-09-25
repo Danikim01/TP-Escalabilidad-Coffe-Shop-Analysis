@@ -36,6 +36,9 @@ class CoffeeShopGateway:
         self.rabbitmq_host = os.getenv('RABBITMQ_HOST', 'localhost')
         self.rabbitmq_port = int(os.getenv('RABBITMQ_PORT', 5672))
         
+        # Chunking configuration
+        self.chunk_size = int(os.getenv('CHUNK_SIZE', 100))
+        
         # Middleware para enviar transacciones a la cola de procesamiento
         self.transactions_queue = RabbitMQMiddlewareQueue(
             host=self.rabbitmq_host,
@@ -43,7 +46,16 @@ class CoffeeShopGateway:
             port=self.rabbitmq_port
         )
         
-        # logger.info(f"Gateway configurado con RabbitMQ: {self.rabbitmq_host}:{self.rabbitmq_port}")
+        logger.info(f"Gateway configurado con RabbitMQ: {self.rabbitmq_host}:{self.rabbitmq_port}")
+        logger.info(f"Chunking configurado: {self.chunk_size} transacciones por chunk")
+    
+    def create_chunks(self, transactions):
+        """Divide las transacciones en chunks para procesamiento optimizado"""
+        chunks = []
+        for i in range(0, len(transactions), self.chunk_size):
+            chunk = transactions[i:i + self.chunk_size]
+            chunks.append(chunk)
+        return chunks
     
     def start_server(self):
         """Start the gateway server"""
@@ -130,14 +142,20 @@ class CoffeeShopGateway:
             
             # Si son transacciones, enviarlas a la cola de procesamiento
             if data_type == DataType.TRANSACTIONS:
-                # logger.info(f"Enviando {len(rows)} transacciones a la cola de procesamiento")
+                logger.info(f"Procesando {len(rows)} transacciones con chunking (chunk_size={self.chunk_size})")
                 try:
-                    # Enviar cada transacción individualmente a la cola
-                    for transaction in rows:
-                        self.transactions_queue.send(transaction)
-                    # logger.info(f"Enviadas {len(rows)} transacciones a la cola de procesamiento")
+                    # Crear chunks de transacciones para procesamiento optimizado
+                    chunks = self.create_chunks(rows)
+                    logger.info(f"Creando {len(chunks)} chunks de transacciones")
+                    
+                    # Enviar cada chunk completo a la cola
+                    for i, chunk in enumerate(chunks):
+                        self.transactions_queue.send(chunk)
+                        logger.info(f"Enviado chunk {i+1}/{len(chunks)} con {len(chunk)} transacciones")
+                    
+                    logger.info(f"Enviados {len(chunks)} chunks con {len(rows)} transacciones totales")
                 except Exception as e:
-                    logger.error(f"Error enviando transacciones a RabbitMQ: {e}")
+                    logger.error(f"Error enviando chunks a RabbitMQ: {e}")
             
             # Send success response
             send_response(client_socket, True)

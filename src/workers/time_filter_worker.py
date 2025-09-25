@@ -27,11 +27,12 @@ class TimeFilterWorker:
         # Configuración de prefetch para load balancing
         self.prefetch_count = int(os.getenv('PREFETCH_COUNT', 10))
         
-        # Middleware para recibir datos
+        # Middleware para recibir datos con prefetch optimizado
         self.input_middleware = RabbitMQMiddlewareQueue(
             host=self.rabbitmq_host,
             queue_name=self.input_queue,
-            port=self.rabbitmq_port
+            port=self.rabbitmq_port,
+            prefetch_count=self.prefetch_count
         )
         
         # Middleware para enviar datos filtrados
@@ -99,21 +100,18 @@ class TimeFilterWorker:
     
     def process_batch(self, batch):
         """
-        Procesa un lote de transacciones.
+        Procesa un lote de transacciones (puede ser chunk o transacciones individuales).
+        Procesa y envía inmediatamente sin almacenar en memoria.
         
         Args:
-            batch: Lista de transacciones
+            batch: Lista de transacciones o chunk de transacciones
         """
         try:
-            filtered_count = 0
-            total_count = len(batch)
-            
+            # Procesar cada transacción individualmente y enviar inmediatamente
+            # Sin almacenar en memoria (cumple restricción de cátedra)
             for transaction in batch:
                 if self.filter_by_time(transaction):
                     self.output_middleware.send(transaction)
-                    filtered_count += 1
-            
-            # Lote procesado sin logs
             
         except Exception:
             pass

@@ -25,11 +25,12 @@ class ResultsWorker:
         # Configuración de prefetch para load balancing
         self.prefetch_count = int(os.getenv('PREFETCH_COUNT', 10))
         
-        # Middleware para recibir datos
+        # Middleware para recibir datos con prefetch optimizado
         self.input_middleware = RabbitMQMiddlewareQueue(
             host=self.rabbitmq_host,
             queue_name=self.input_queue,
-            port=self.rabbitmq_port
+            port=self.rabbitmq_port,
+            prefetch_count=self.prefetch_count
         )
         
         # Contador de resultados
@@ -62,26 +63,26 @@ class ResultsWorker:
             print(f"  Fecha: {created_at}")
             print("-" * 50)
             
-            logger.info(f"Resultado #{self.result_count}: {transaction_id} - ${final_amount}")
+            # logger.info(f"Resultado #{self.result_count}: {transaction_id} - ${final_amount}")
             
         except Exception as e:
             logger.error(f"Error procesando resultado: {e}")
     
     def process_batch(self, batch):
         """
-        Procesa un lote de resultados.
+        Procesa un lote de resultados (puede ser chunk o resultados individuales).
         
         Args:
-            batch: Lista de resultados
+            batch: Lista de resultados o chunk de resultados
         """
         try:
             for result in batch:
                 self.process_result(result)
             
-            logger.info(f"Procesado lote de {len(batch)} resultados")
+            logger.info(f"Procesado chunk de {len(batch)} resultados")
             
         except Exception as e:
-            logger.error(f"Error procesando lote de resultados: {e}")
+            logger.error(f"Error procesando chunk de resultados: {e}")
     
     def start_consuming(self):
         """Inicia el consumo de mensajes de la cola de entrada."""

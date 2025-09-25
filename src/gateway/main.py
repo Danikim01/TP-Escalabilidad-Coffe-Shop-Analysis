@@ -2,7 +2,6 @@ import socket
 import logging
 import threading
 import os
-from typing import Dict, Set
 from protocol import (
     MessageType, DataType, send_response, receive_message, 
     parse_batch_message, parse_eof_message

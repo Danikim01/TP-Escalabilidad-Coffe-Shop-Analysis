@@ -104,7 +104,7 @@ class RabbitMQMiddlewareQueue(MessageMiddleware):
             self._ensure_connection()
             
             # Declarar la cola (es idempotente)
-            self.channel.queue_declare(queue=self.queue_name, durable=True)
+            self.channel.queue_declare(queue=self.queue_name, durable=False)
             
             # Configurar el consumidor con ACK optimizado para chunks
             def callback(ch, method, properties, body):
@@ -163,7 +163,7 @@ class RabbitMQMiddlewareQueue(MessageMiddleware):
             self._ensure_connection()
             
             # Declarar la cola (es idempotente)
-            self.channel.queue_declare(queue=self.queue_name, durable=True)
+            self.channel.queue_declare(queue=self.queue_name, durable=False)
             
             # Serializar el mensaje manualmente
             message_body = serialize_message(message)
@@ -300,7 +300,7 @@ class RabbitMQMiddlewareExchange(MessageMiddleware):
             self.channel.exchange_declare(
                 exchange=self.exchange_name,
                 exchange_type=self.exchange_type,
-                durable=True
+                durable=False
             )
             
             # Crear una cola temporal para este consumer
@@ -371,7 +371,7 @@ class RabbitMQMiddlewareExchange(MessageMiddleware):
             self.channel.exchange_declare(
                 exchange=self.exchange_name,
                 exchange_type=self.exchange_type,
-                durable=True
+                durable=False
             )
             
             # Serializar el mensaje manualmente

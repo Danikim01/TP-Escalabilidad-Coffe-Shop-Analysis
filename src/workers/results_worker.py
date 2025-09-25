@@ -3,133 +3,130 @@
 import os
 import sys
 import logging
+from typing import Any, Dict, List
 from middleware.rabbitmq_middleware import RabbitMQMiddlewareQueue
 
 # Configurar logging
 logging.basicConfig(level=logging.INFO)
 logger = logging.getLogger(__name__)
 
-class ResultsWorker:
-    """
-    Worker final que recibe los resultados procesados y los reenvía al cliente.
-    """
-    
-    def __init__(self):
-        self.rabbitmq_host = os.getenv('RABBITMQ_HOST', 'localhost')
-        self.rabbitmq_port = int(os.getenv('RABBITMQ_PORT', 5672))
-        
-        # Cola de entrada configurable por entorno
-        self.input_queue = os.getenv('INPUT_QUEUE', 'transactions_final_results')
 
-        # Cola de salida para reenviar resultados al cliente
-        self.output_queue = os.getenv('OUTPUT_QUEUE', 'client_results')
-        
+def is_eof_message(message: Any) -> bool:
+    """Return True when message carries an EOF control marker."""
+    return isinstance(message, dict) and str(message.get("type", "")).upper() == "EOF"
+
+
+class ResultsWorker:
+    """Worker final que reenvía los resultados procesados hacia el gateway."""
+
+    def __init__(self):
+        self.rabbitmq_host = os.getenv("RABBITMQ_HOST", "localhost")
+        self.rabbitmq_port = int(os.getenv("RABBITMQ_PORT", 5672))
+
+        # Colas de entrada y salida configurables por entorno
+        self.input_queue = os.getenv("INPUT_QUEUE", "transactions_final_results")
+        self.output_queue = os.getenv("OUTPUT_QUEUE", "gateway_results")
+
         # Configuración de prefetch para load balancing
-        self.prefetch_count = int(os.getenv('PREFETCH_COUNT', 10))
-        
+        self.prefetch_count = int(os.getenv("PREFETCH_COUNT", 10))
+
         # Middleware para recibir datos
         self.input_middleware = RabbitMQMiddlewareQueue(
             host=self.rabbitmq_host,
             queue_name=self.input_queue,
-            port=self.rabbitmq_port
+            port=self.rabbitmq_port,
         )
 
-        # Middleware para publicar resultados procesados
+        # Middleware para reenviar resultados al gateway
         self.output_middleware = RabbitMQMiddlewareQueue(
             host=self.rabbitmq_host,
             queue_name=self.output_queue,
-            port=self.rabbitmq_port
+            port=self.rabbitmq_port,
         )
-        
-        # Contador de resultados
+
         self.result_count = 0
-        
+
         logger.info(
-            f"ResultsWorker inicializado - Input: {self.input_queue}, Output: {self.output_queue}"
+            "ResultsWorker inicializado - Input: %s, Output: %s",
+            self.input_queue,
+            self.output_queue,
         )
-    
-    def process_result(self, result):
-        """
-        Procesa un resultado individual.
-        
-        Args:
-            result: Diccionario con los datos del resultado
-        """
+
+    def process_result(self, result: Dict[str, Any]) -> None:
+        """Reenvía un resultado individual al gateway."""
         try:
+            self.output_middleware.send(result)
             self.result_count += 1
 
-            # Reenviar resultado al cliente
-            self.output_middleware.send(result)
+            transaction_id = result.get("transaction_id", "unknown")
+            final_amount = result.get("final_amount", 0)
+            logger.info("Resultado #%s reenviado: %s - $%s", self.result_count, transaction_id, final_amount)
+        except Exception as exc:
+            logger.error("Error procesando resultado: %s", exc)
 
-            transaction_id = result.get('transaction_id', 'unknown')
-            final_amount = result.get('final_amount', 0)
-
-            logger.info(f"Resultado #{self.result_count}: {transaction_id} - ${final_amount}")
-            
-        except Exception as e:
-            logger.error(f"Error procesando resultado: {e}")
-    
-    def process_batch(self, batch):
-        """
-        Procesa un lote de resultados.
-        
-        Args:
-            batch: Lista de resultados
-        """
+    def process_batch(self, batch: List[Dict[str, Any]]) -> None:
+        """Procesa un lote de resultados y los reenvía al gateway."""
         try:
             for result in batch:
                 self.process_result(result)
-            
-            logger.info(f"Procesado lote de {len(batch)} resultados")
-            
-        except Exception as e:
-            logger.error(f"Error procesando lote de resultados: {e}")
-    
-    def start_consuming(self):
+            logger.info("Procesado lote de %s resultados", len(batch))
+        except Exception as exc:
+            logger.error("Error procesando lote de resultados: %s", exc)
+
+    def _handle_message(self, message: Any) -> None:
+        """Procesa cualquier mensaje recibido desde la cola."""
+        if is_eof_message(message):
+            logger.info("Recibido EOF en ResultsWorker; reenviando al gateway")
+            try:
+                self.output_middleware.send({"type": "EOF"})
+            finally:
+                self.input_middleware.stop_consuming()
+            return
+
+        if isinstance(message, list):
+            self.process_batch(message)
+        else:
+            self.process_result(message)
+
+    def start_consuming(self) -> None:
         """Inicia el consumo de mensajes de la cola de entrada."""
         try:
             logger.info("Iniciando ResultsWorker...")
-            def on_message(message):
-                """Callback para procesar mensajes recibidos."""
+
+            def on_message(message: Any) -> None:
                 try:
-                    if isinstance(message, list):
-                        # Es un lote de resultados
-                        self.process_batch(message)
-                    else:
-                        # Es un resultado individual
-                        self.process_result(message)
-                        
-                except Exception as e:
-                    logger.error(f"Error en callback de mensaje: {e}")
-            
-            # Iniciar consumo
+                    self._handle_message(message)
+                except Exception as exc:  # noqa: BLE001
+                    logger.error("Error en callback de mensaje: %s", exc)
+
             self.input_middleware.start_consuming(on_message)
-            
+
         except KeyboardInterrupt:
-            logger.info("Recibida señal de interrupción")
-            logger.info(f"Total de resultados encontrados: {self.result_count}")
-        except Exception as e:
-            logger.error(f"Error iniciando consumo: {e}")
+            logger.info("ResultsWorker interrumpido por el usuario")
+        except Exception as exc:
+            logger.error("Error iniciando consumo: %s", exc)
         finally:
             self.cleanup()
-    
-    def cleanup(self):
-        """Limpia recursos."""
+
+    def cleanup(self) -> None:
+        """Limpia recursos al finalizar."""
         try:
             self.input_middleware.close()
             self.output_middleware.close()
-            logger.info("Recursos limpiados")
-        except Exception as e:
-            logger.warning(f"Error limpiando recursos: {e}")
+            logger.info("ResultsWorker finalizado - total reenviado: %s", self.result_count)
+        except Exception as exc:
+            logger.warning("Error limpiando recursos: %s", exc)
 
-def main():
+
+def main() -> None:
     """Punto de entrada principal."""
     try:
         worker = ResultsWorker()
         worker.start_consuming()
-    except Exception as e:
-        logger.error(f"Error en main: {e}")
+    except Exception as exc:  # noqa: BLE001
+        logger.error("Error en main: %s", exc)
         sys.exit(1)
+
 
 if __name__ == "__main__":
     main()

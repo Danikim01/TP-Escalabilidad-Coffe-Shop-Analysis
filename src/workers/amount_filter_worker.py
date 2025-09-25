@@ -3,6 +3,7 @@
 import os
 import sys
 import logging
+from typing import Any
 from middleware.rabbitmq_middleware import RabbitMQMiddlewareQueue
 
 # Configurar logging
@@ -79,6 +80,9 @@ class AmountFilterWorker:
         except Exception:
             return False
     
+    def _is_eof(self, message: Any) -> bool:
+        return isinstance(message, dict) and str(message.get('type', '')).upper() == 'EOF'
+
     def process_transaction(self, transaction):
         """
         Procesa una transacción individual.
@@ -145,6 +149,11 @@ class AmountFilterWorker:
             def on_message(message):
                 """Callback para procesar mensajes recibidos."""
                 try:
+                    if self._is_eof(message):
+                        self.output_middleware.send({'type': 'EOF'})
+                        self.input_middleware.stop_consuming()
+                        return
+
                     if isinstance(message, list):
                         # Es un lote de transacciones
                         self.process_batch(message)

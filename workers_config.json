@@ -5,11 +5,10 @@
   },
   "service_environment": {
     "gateway": {
-      "OUTPUT_QUEUE": "transactions_raw"
+      "OUTPUT_QUEUE": "transactions_raw",
+      "RESULTS_QUEUE": "gateway_results"
     },
-    "client": {
-      "CLIENT_RESULTS_QUEUE": "client_results"
-    }
+    "client": {}
   },
   "workers": {
     "year_filter": {
@@ -54,7 +53,7 @@
           "count": 1,
           "environment": {
             "INPUT_QUEUE": "transactions_final_results",
-            "OUTPUT_QUEUE": "client_results"
+            "OUTPUT_QUEUE": "gateway_results"
           }
         }
       ]

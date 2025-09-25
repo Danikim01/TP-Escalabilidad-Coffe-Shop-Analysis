@@ -4,16 +4,9 @@ import socket
 import logging
 import yaml
 import sys
-from pathlib import Path
-from typing import List, Dict, Any, Optional
-
-# Ensure project root is available for shared middleware imports
-PROJECT_ROOT = Path(__file__).resolve().parents[2]
-if str(PROJECT_ROOT) not in sys.path:
-    sys.path.append(str(PROJECT_ROOT))
-
-from middleware.rabbitmq_middleware import RabbitMQMiddlewareQueue
-from protocol import DataType, send_batch, send_eof, receive_response
+import json
+from typing import List, Dict, Any
+from protocol import (DataType, send_batch, send_eof, receive_response)
 
 logging.basicConfig(
     level=logging.INFO,
@@ -78,27 +71,15 @@ class CoffeeShopClient:
         log_level = log_config.get('level', 'INFO')
         logging.getLogger().setLevel(getattr(logging, log_level.upper(), logging.INFO))
         
-        # RabbitMQ configuration for receiving processed results
-        rabbitmq_config = self.config.get('rabbitmq', {})
-        self.rabbitmq_host = os.getenv('RABBITMQ_HOST', rabbitmq_config.get('host', 'localhost'))
-        self.rabbitmq_port = int(os.getenv('RABBITMQ_PORT', rabbitmq_config.get('port', 5672)))
-
-        results_config = self.config.get('results', {})
-        results_queue_env = (
-            os.getenv('CLIENT_RESULTS_QUEUE') or
-            os.getenv('RESULTS_INPUT_QUEUE') or
-            os.getenv('INPUT_QUEUE')
-        )
-        self.results_queue_name = results_queue_env or results_config.get('queue', 'client_results')
-
         self.data_dir = '.data'
-        self.socket = None
-        self.results_middleware: Optional[RabbitMQMiddlewareQueue] = None
+        self.socket: socket.socket | None = None
         self.results_received = 0
         self._results_header_printed = False
-        
-        logger.info(f"Client configured - Gateway: {self.gateway_host}:{self.gateway_port}, "
-                   f"Batch: {self.max_batch_size_kb}KB max")
+
+        logger.info(
+            f"Client configured - Gateway: {self.gateway_host}:{self.gateway_port}, "
+            f"Batch: {self.max_batch_size_kb}KB max"
+        )
         
     def connect_to_gateway(self):
         """Establish connection to gateway"""
@@ -117,29 +98,6 @@ class CoffeeShopClient:
             self.socket = None
             logger.info("Disconnected from gateway")
 
-    def _ensure_results_middleware(self) -> Optional[RabbitMQMiddlewareQueue]:
-        """Lazily create the middleware to consume processed results."""
-        if not self.results_queue_name:
-            logger.debug("No results queue configured; skipping consumer setup")
-            return None
-
-        if self.results_middleware is None:
-            self.results_middleware = RabbitMQMiddlewareQueue(
-                host=self.rabbitmq_host,
-                queue_name=self.results_queue_name,
-                port=self.rabbitmq_port
-            )
-        return self.results_middleware
-
-    def close_results_middleware(self):
-        """Close the results middleware connection if it was created."""
-        if self.results_middleware:
-            try:
-                self.results_middleware.close()
-            except Exception as e:
-                logger.warning(f"Error closing results middleware: {e}")
-            finally:
-                self.results_middleware = None
 
     def _print_results_header(self):
         """Print the results banner only once."""
@@ -153,19 +111,21 @@ class CoffeeShopClient:
         print("=" * 60)
         self._results_header_printed = True
 
-    def _handle_single_result(self, result: Dict[str, Any]):
-        """Print a single result message received from the queue."""
+    def _handle_single_result(self, result: Dict[str, Any]) -> bool:
+        """Print a single result message received from the results stream.
+
+        Returns:
+            bool: False if an EOF control message was received, True otherwise.
+        """
         if not isinstance(result, dict):
             logger.warning(f"Ignoring unexpected result payload: {result}")
-            return
+            return True
 
         # Allow special control messages to stop consumption
         message_type = result.get('type')
         if message_type and str(message_type).upper() == 'EOF':
-            logger.info("Received EOF control message from results queue")
-            if self.results_middleware:
-                self.results_middleware.stop_consuming()
-            return
+            logger.info("Received EOF control message from results stream")
+            return False
 
         self.results_received += 1
         self._print_results_header()
@@ -188,36 +148,69 @@ class CoffeeShopClient:
             f"Resultado #{self.results_received}: {transaction_id} - ${final_amount}"
         )
 
-    def _handle_results_message(self, message: Any):
-        """Handle queue messages that may contain individual or batched results."""
+        return True
+
+    def _handle_results_message(self, message: Any) -> bool:
+        """Handle stream messages that may contain individual or batched results.
+
+        Returns:
+            bool: False when an EOF control message is encountered.
+        """
         try:
             if isinstance(message, list):
                 for item in message:
-                    self._handle_single_result(item)
+                    if not self._handle_single_result(item):
+                        return False
             else:
-                self._handle_single_result(message)
+                if not self._handle_single_result(message):
+                    return False
+            return True
         except Exception as exc:
             logger.error(f"Error processing results message: {exc}")
+            return True
 
     def listen_for_results(self):
-        """Consume the results queue and print messages as they arrive."""
-        middleware = self._ensure_results_middleware()
-        if middleware is None:
-            logger.info("No results queue configured; skipping results listener")
+        """Escucha resultados reenviados por el gateway mediante la misma conexión TCP."""
+        if not self.socket:
+            logger.info("Gateway connection not available; skipping results listener")
             return
 
+        sock = self.socket
+        buffer = ""
+
         try:
-            logger.info(
-                f"Listening for processed results on queue '{self.results_queue_name}'"
-            )
-            middleware.start_consuming(self._handle_results_message)
+            logger.info("Waiting for processed results from gateway")
+
+            while True:
+                chunk = sock.recv(4096)
+                if not chunk:
+                    logger.info("Gateway closed the connection")
+                    break
+
+                buffer += chunk.decode('utf-8')
+
+                while '\n' in buffer:
+                    line, buffer = buffer.split('\n', 1)
+                    line = line.strip()
+                    if not line:
+                        continue
+
+                    try:
+                        message = json.loads(line)
+                    except json.JSONDecodeError as exc:
+                        logger.warning(f"Discarding malformed results payload: {exc}")
+                        continue
+
+                    if not self._handle_results_message(message):
+                        logger.info("EOF received from gateway; stopping listener")
+                        return
+
         except KeyboardInterrupt:
             logger.info("Results listener interrupted by user")
         except Exception as exc:
             logger.error(f"Error while listening for results: {exc}")
         finally:
             logger.info(f"Total results received: {self.results_received}")
-            self.close_results_middleware()
     
     def get_csv_files_by_type(self, data_type_str: str) -> List[str]:
         """Get all CSV files for a specific data type"""
@@ -342,6 +335,18 @@ class CoffeeShopClient:
         try:
             send_eof(self.socket, data_type)
             logger.info(f"Sent EOF for {data_type_str}")
+
+            try:
+                response_code = receive_response(self.socket)
+                if response_code != 0:
+                    logger.warning(
+                        f"Gateway reported error while acknowledging EOF for {data_type_str}"
+                    )
+            except Exception as exc:
+                logger.error(
+                    f"Failed to receive EOF acknowledgement for {data_type_str}: {exc}"
+                )
+
         except Exception as e:
             logger.error(f"Failed to send EOF for {data_type_str}: {e}")
     
@@ -362,14 +367,14 @@ class CoffeeShopClient:
                 self.send_data_type_files(data_type, data_type_str)
             
             logger.info("All data sent successfully")
+
+            # Esperar resultados del gateway sin cerrar la conexión
+            self.listen_for_results()
             
         except Exception as e:
             logger.error(f"Error in client execution: {e}")
         finally:
             self.disconnect()
-
-        # After sending all data, wait for results from the processing pipeline
-        self.listen_for_results()
 
 def main():
     """Entry point"""

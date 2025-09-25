@@ -3,21 +3,57 @@
     "RABBITMQ_HOST": "rabbitmq",
     "RABBITMQ_PORT": 5672
   },
+  "service_environment": {
+    "gateway": {
+      "OUTPUT_QUEUE": "transactions_raw"
+    }
+  },
   "workers": {
     "year_filter": {
-      "count": 2,
-      "prefetch_count": 20
+      "prefetch_count": 20,
+      "groups": [
+        {
+          "count": 2,
+          "environment": {
+            "INPUT_QUEUE": "transactions_raw",
+            "OUTPUT_QUEUE": "transactions_year_filtered"
+          }
+        }
+      ]
     },
     "time_filter": {
-      "count": 2,
-      "prefetch_count": 20
+      "prefetch_count": 20,
+      "groups": [
+        {
+          "count": 2,
+          "environment": {
+            "INPUT_QUEUE": "transactions_year_filtered",
+            "OUTPUT_QUEUE": "transactions_time_filtered"
+          }
+        }
+      ]
     },
     "amount_filter": {
-      "count": 2,
-      "prefetch_count": 20
+      "prefetch_count": 20,
+      "groups": [
+        {
+          "count": 2,
+          "environment": {
+            "INPUT_QUEUE": "transactions_time_filtered",
+            "OUTPUT_QUEUE": "transactions_final_results"
+          }
+        }
+      ]
     },
     "results": {
-      "count": 1
+      "groups": [
+        {
+          "count": 1,
+          "environment": {
+            "INPUT_QUEUE": "transactions_final_results"
+          }
+        }
+      ]
     }
   }
 }

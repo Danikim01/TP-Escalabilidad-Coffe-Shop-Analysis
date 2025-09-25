@@ -5,11 +5,33 @@ from __future__ import annotations
 
 import argparse
 import json
+from dataclasses import dataclass
 from pathlib import Path
-from typing import Dict, Iterable, List
+from typing import Any, Dict, Iterable, List, Mapping, Optional, TypedDict
 
 # Static metadata for each worker type we know how to generate.
-WORKER_DEFINITIONS: Dict[str, Dict[str, object]] = {
+
+
+class WorkerDefinition(TypedDict):
+    display_name: str
+    base_service_name: str
+    command: List[str]
+    needs_worker_id: bool
+    supports_prefetch: bool
+    default_prefetch: Optional[int]
+    default_environment: Dict[str, str]
+    required_environment: List[str]
+
+
+@dataclass
+class WorkerGroup:
+    count: int
+    environment: Dict[str, str]
+    name_suffix: Optional[str]
+    prefetch_count: Optional[int]
+
+
+WORKER_DEFINITIONS: Dict[str, WorkerDefinition] = {
     "year_filter": {
         "display_name": "Year Filter Workers",
         "base_service_name": "year-filter-worker",
@@ -17,6 +39,11 @@ WORKER_DEFINITIONS: Dict[str, Dict[str, object]] = {
         "needs_worker_id": True,
         "supports_prefetch": True,
         "default_prefetch": 20,
+        "default_environment": {
+            "INPUT_QUEUE": "transactions_raw",
+            "OUTPUT_QUEUE": "transactions_year_filtered",
+        },
+        "required_environment": ["INPUT_QUEUE", "OUTPUT_QUEUE"],
     },
     "time_filter": {
         "display_name": "Time Filter Workers",
@@ -25,6 +52,11 @@ WORKER_DEFINITIONS: Dict[str, Dict[str, object]] = {
         "needs_worker_id": True,
         "supports_prefetch": True,
         "default_prefetch": 20,
+        "default_environment": {
+            "INPUT_QUEUE": "transactions_year_filtered",
+            "OUTPUT_QUEUE": "transactions_time_filtered",
+        },
+        "required_environment": ["INPUT_QUEUE", "OUTPUT_QUEUE"],
     },
     "amount_filter": {
         "display_name": "Amount Filter Workers",
@@ -33,6 +65,11 @@ WORKER_DEFINITIONS: Dict[str, Dict[str, object]] = {
         "needs_worker_id": True,
         "supports_prefetch": True,
         "default_prefetch": 20,
+        "default_environment": {
+            "INPUT_QUEUE": "transactions_time_filtered",
+            "OUTPUT_QUEUE": "transactions_final_results",
+        },
+        "required_environment": ["INPUT_QUEUE", "OUTPUT_QUEUE"],
     },
     "results": {
         "display_name": "Results Workers",
@@ -41,10 +78,150 @@ WORKER_DEFINITIONS: Dict[str, Dict[str, object]] = {
         "needs_worker_id": False,
         "supports_prefetch": False,
         "default_prefetch": None,
+        "default_environment": {
+            "INPUT_QUEUE": "transactions_final_results",
+        },
+        "required_environment": ["INPUT_QUEUE"],
     },
 }
 
-BASE_HEADER = """version: '3.8'\n\nservices:\n  # RabbitMQ Server\n  rabbitmq:\n    image: rabbitmq:3.12-management\n    container_name: rabbitmq-server\n    ports:\n      - \"5672:5672\"\n      - \"15672:15672\"\n    environment:\n      RABBITMQ_DEFAULT_USER: guest\n      RABBITMQ_DEFAULT_PASS: guest\n    networks:\n      - middleware-network\n    healthcheck:\n      test: [\"CMD\", \"rabbitmq-diagnostics\", \"ping\"]\n      interval: 30s\n      timeout: 10s\n      retries: 5\n    volumes:\n      - rabbitmq_data:/var/lib/rabbitmq\n\n  # Gateway Service\n  gateway:\n    build:\n      context: .\n      dockerfile: ./src/gateway/Dockerfile\n    container_name: coffee-gateway\n    ports:\n      - \"12345:12345\"\n    networks:\n      - middleware-network\n    depends_on:\n      rabbitmq:\n        condition: service_healthy\n    environment:\n      - RABBITMQ_HOST=rabbitmq\n      - RABBITMQ_PORT=5672\n    restart: unless-stopped\n\n  # Client Service\n  client:\n    build:\n      context: ./src/client\n      dockerfile: Dockerfile\n    container_name: coffee-client\n    networks:\n      - middleware-network\n    depends_on:\n      - gateway\n      - rabbitmq\n    environment:\n      - GATEWAY_HOST=gateway\n      - GATEWAY_PORT=12345\n    volumes:\n      - ./src/client/.data:/app/.data\n\n"""
+SERVICE_ENV_DEFAULTS: Dict[str, Dict[str, str]] = {
+    "gateway": {
+        "RABBITMQ_HOST": "rabbitmq",
+        "RABBITMQ_PORT": "5672",
+        "OUTPUT_QUEUE": WORKER_DEFINITIONS["year_filter"]["default_environment"]["INPUT_QUEUE"],
+    },
+    "client": {
+        "GATEWAY_HOST": "gateway",
+        "GATEWAY_PORT": "12345",
+    },
+}
+
+
+def ensure_mapping(value: object, context: str) -> Optional[Mapping[str, Any]]:
+    if value is None:
+        return None
+    if isinstance(value, Mapping):
+        return value
+    raise SystemExit(f"{context} must be an object if provided")
+
+
+def normalize_environment(
+    defaults: Mapping[str, str],
+    overrides: Optional[Mapping[str, Any]],
+    context: str,
+) -> Dict[str, str]:
+    env = {key: str(value) for key, value in defaults.items()}
+    if overrides is None:
+        return env
+    for key, value in overrides.items():
+        env[key] = str(value)
+    return env
+
+
+def render_base_services(service_env_cfg: object) -> str:
+    service_env_map = ensure_mapping(service_env_cfg, "'service_environment'") or {}
+
+    gateway_overrides = ensure_mapping(
+        service_env_map.get("gateway"),
+        "Service 'gateway' environment",
+    )
+    client_overrides = ensure_mapping(
+        service_env_map.get("client"),
+        "Service 'client' environment",
+    )
+
+    gateway_env = normalize_environment(
+        SERVICE_ENV_DEFAULTS["gateway"],
+        gateway_overrides,
+        "Service 'gateway' environment",
+    )
+    client_env = normalize_environment(
+        SERVICE_ENV_DEFAULTS["client"],
+        client_overrides,
+        "Service 'client' environment",
+    )
+
+    lines = ["services:"]
+
+    # RabbitMQ service definition
+    lines.extend(
+        [
+            "  # RabbitMQ Server",
+            "  rabbitmq:",
+            "    image: rabbitmq:3.12-management",
+            "    container_name: rabbitmq-server",
+            "    ports:",
+            "      - \"5672:5672\"",
+            "      - \"15672:15672\"",
+            "    environment:",
+            "      RABBITMQ_DEFAULT_USER: guest",
+            "      RABBITMQ_DEFAULT_PASS: guest",
+            "    networks:",
+            "      - middleware-network",
+            "    healthcheck:",
+            "      test: [\"CMD\", \"rabbitmq-diagnostics\", \"ping\"]",
+            "      interval: 30s",
+            "      timeout: 10s",
+            "      retries: 5",
+            "    volumes:",
+            "      - rabbitmq_data:/var/lib/rabbitmq",
+            "",
+        ]
+    )
+
+    # Gateway service definition
+    lines.extend(
+        [
+            "  # Gateway Service",
+            "  gateway:",
+            "    build:",
+            "      context: .",
+            "      dockerfile: ./src/gateway/Dockerfile",
+            "    container_name: coffee-gateway",
+            "    ports:",
+            "      - \"12345:12345\"",
+            "    networks:",
+            "      - middleware-network",
+            "    depends_on:",
+            "      rabbitmq:",
+            "        condition: service_healthy",
+        ]
+    )
+    if gateway_env:
+        lines.append("    environment:")
+        lines.extend(format_environment(gateway_env, indent="      "))
+    lines.append("    restart: unless-stopped")
+    lines.append("")
+
+    # Client service definition
+    lines.extend(
+        [
+            "  # Client Service",
+            "  client:",
+            "    build:",
+            "      context: ./src/client",
+            "      dockerfile: Dockerfile",
+            "    container_name: coffee-client",
+            "    networks:",
+            "      - middleware-network",
+            "    depends_on:",
+            "      - gateway",
+            "      - rabbitmq",
+        ]
+    )
+    if client_env:
+        lines.append("    environment:")
+        lines.extend(format_environment(client_env, indent="      "))
+    lines.extend(
+        [
+            "    volumes:",
+            "      - ./src/client/.data:/app/.data",
+            "",
+        ]
+    )
+
+    return "\n".join(lines)
 
 FOOTER = """networks:\n  middleware-network:\n    driver: bridge\n\nvolumes:\n  rabbitmq_data:\n"""
 
@@ -78,41 +255,166 @@ def read_config(path: Path) -> Dict[str, object]:
         raise SystemExit(f"Invalid JSON in {path}: {exc}") from exc
 
 
-def load_worker_settings(raw_workers: Dict[str, object]) -> Dict[str, Dict[str, object]]:
-    settings: Dict[str, Dict[str, object]] = {}
+def ensure_int(value: object, context: str, allow_zero: bool = True) -> int:
+    if not isinstance(value, int):
+        raise SystemExit(f"{context} must be an integer (got {value!r})")
+    if value < 0 or (value == 0 and not allow_zero):
+        comparator = "> 0" if not allow_zero else ">= 0"
+        raise SystemExit(f"{context} must be {comparator} (got {value})")
+    return value
+
+
+def merge_worker_environment(
+    worker_key: str,
+    group_index: int,
+    meta: WorkerDefinition,
+    worker_level_env: Optional[Mapping[str, Any]],
+    group_env: Optional[Mapping[str, Any]],
+) -> Dict[str, str]:
+    env = dict(meta["default_environment"])
+
+    for source, source_name in (
+        (worker_level_env, "worker-level"),
+        (group_env, "group-level"),
+    ):
+        if source is None:
+            continue
+        for key, value in source.items():
+            env[key] = str(value)
+
+    required_keys = meta["required_environment"]
+    missing = [key for key in required_keys if key not in env]
+    if missing:
+        missing_str = ", ".join(missing)
+        raise SystemExit(
+            f"Worker '{worker_key}' group #{group_index} missing required environment keys: {missing_str}"
+        )
+
+    return env
+
+
+def normalize_worker_groups(
+    worker_key: str,
+    worker_raw: object,
+    meta: WorkerDefinition,
+) -> List[WorkerGroup]:
+    # Handle the shorthand where the worker is configured as an integer count.
+    if isinstance(worker_raw, int):
+        count = ensure_int(worker_raw, f"Worker '{worker_key}' count")
+        if count == 0:
+            return []
+        environment = merge_worker_environment(worker_key, 1, meta, None, None)
+        prefetch_value = meta["default_prefetch"] if meta["supports_prefetch"] else None
+        prefetch = (
+            ensure_int(
+                prefetch_value,
+                f"Worker '{worker_key}' default prefetch",
+                allow_zero=False,
+            )
+            if prefetch_value is not None
+            else None
+        )
+        return [
+            WorkerGroup(
+                count=count,
+                environment=environment,
+                name_suffix=None,
+                prefetch_count=prefetch,
+            )
+        ]
+
+    if isinstance(worker_raw, list):
+        worker_defaults: Dict[str, object] = {}
+        groups_raw = worker_raw
+    elif isinstance(worker_raw, dict):
+        worker_defaults = dict(worker_raw)
+        groups_raw = worker_defaults.pop("groups", [worker_defaults])
+    else:
+        raise SystemExit(
+            f"Worker configuration for '{worker_key}' must be an integer, object, or list"
+        )
+
+    if not isinstance(groups_raw, list):
+        raise SystemExit(
+            f"Worker '{worker_key}' groups configuration must be a list of objects"
+        )
+
+    worker_level_env = ensure_mapping(
+        worker_defaults.get("environment"),
+        f"Worker '{worker_key}' environment",
+    )
+    worker_level_prefetch = worker_defaults.get("prefetch_count")
+    worker_level_count = worker_defaults.get("count")
+    worker_level_suffix = worker_defaults.get("name_suffix")
+
+    groups: List[WorkerGroup] = []
+    for index, group_raw in enumerate(groups_raw, start=1):
+        if not isinstance(group_raw, dict):
+            raise SystemExit(
+                f"Worker '{worker_key}' group #{index} must be an object"
+            )
+
+        count_value = group_raw.get("count", worker_level_count)
+        if count_value is None:
+            raise SystemExit(
+                f"Worker '{worker_key}' group #{index} is missing a 'count' value"
+            )
+        count = ensure_int(count_value, f"Worker '{worker_key}' group #{index} count")
+        if count == 0:
+            continue
+
+        environment = merge_worker_environment(
+            worker_key,
+            index,
+            meta,
+            worker_level_env,
+            ensure_mapping(
+                group_raw.get("environment"),
+                f"Worker '{worker_key}' group #{index} environment",
+            ),
+        )
+
+        name_suffix = group_raw.get("name_suffix", worker_level_suffix)
+        if name_suffix is not None and not isinstance(name_suffix, str):
+            raise SystemExit(
+                f"Worker '{worker_key}' group #{index} name_suffix must be a string"
+            )
+
+        group_prefetch: Optional[int]
+        if meta["supports_prefetch"]:
+            prefetch_value = group_raw.get("prefetch_count", worker_level_prefetch)
+            if prefetch_value is None:
+                prefetch_value = meta["default_prefetch"]
+            group_prefetch = ensure_int(
+                prefetch_value,
+                f"Worker '{worker_key}' group #{index} prefetch_count",
+                allow_zero=False,
+            )
+        else:
+            group_prefetch = None
+
+        groups.append(
+            WorkerGroup(
+                count=count,
+                environment=environment,
+                name_suffix=name_suffix,
+                prefetch_count=group_prefetch,
+            )
+        )
+
+    return groups
+
+
+def load_worker_settings(raw_workers: Dict[str, object]) -> Dict[str, List[WorkerGroup]]:
+    settings: Dict[str, List[WorkerGroup]] = {}
     for key, meta in WORKER_DEFINITIONS.items():
         worker_raw = raw_workers.get(key)
         if worker_raw is None:
             raise SystemExit(f"Missing configuration for worker '{key}'")
 
-        if isinstance(worker_raw, int):
-            count = worker_raw
-            worker_cfg: Dict[str, object] = {"count": count}
-        elif isinstance(worker_raw, dict):
-            worker_cfg = dict(worker_raw)
-            count = worker_cfg.get("count")
-        else:
-            raise SystemExit(
-                f"Worker configuration for '{key}' must be an integer or object"
-            )
-
-        if not isinstance(count, int) or count < 0:
-            raise SystemExit(
-                f"Worker '{key}' needs a non-negative integer 'count' (got {count!r})"
-            )
-
-        if meta["supports_prefetch"]:
-            prefetch = worker_cfg.get("prefetch_count", meta["default_prefetch"])
-            if prefetch is None:
-                raise SystemExit(
-                    f"Worker '{key}' requires a 'prefetch_count' value"
-                )
-            if not isinstance(prefetch, int) or prefetch <= 0:
-                raise SystemExit(
-                    f"Worker '{key}' prefetch_count must be a positive integer"
-                )
-            worker_cfg["prefetch_count"] = prefetch
-        settings[key] = worker_cfg
+        groups = normalize_worker_groups(key, worker_raw, meta)
+        if groups:
+            settings[key] = groups
     return settings
 
 
@@ -126,61 +428,90 @@ def format_command(command: List[str]) -> str:
     return f"[{quoted}]"
 
 
+def build_service_name(
+    base_service: str,
+    total_count: int,
+    name_suffix: Optional[str],
+    worker_id: int,
+    instance_index: int,
+) -> str:
+    if total_count == 1 and not name_suffix:
+        return base_service
+
+    parts = [base_service]
+    if name_suffix:
+        parts.append(name_suffix)
+        parts.append(str(instance_index))
+    else:
+        parts.append(str(worker_id))
+    return "-".join(parts)
+
+
 def generate_worker_sections(
-    workers: Dict[str, Dict[str, object]],
+    workers: Dict[str, List[WorkerGroup]],
     common_env: Dict[str, str],
 ) -> List[str]:
     sections: List[str] = []
 
-    for key, worker_cfg in workers.items():
-        meta = WORKER_DEFINITIONS[key]
-        count = worker_cfg["count"]
-        display_name = meta["display_name"]
-        base_service = meta["base_service_name"]
-        comment = None
-        if count > 0:
-            plural = "instancias" if count != 1 else "instancia"
-            comment = f"  # {display_name} ({count} {plural})"
-        elif count == 0:
-            # Skip generating section entirely when count is zero.
+    for key, groups in workers.items():
+        if not groups:
             continue
 
-        if comment:
-            sections.append(comment)
+        meta = WORKER_DEFINITIONS[key]
+        display_name = meta["display_name"]
+        base_service = meta["base_service_name"]
 
-        for index in range(1, count + 1):
-            service_name = base_service
-            if count > 1:
-                service_name = f"{base_service}-{index}"
+        total_count = sum(group.count for group in groups)
+        if total_count == 0:
+            continue
 
-            lines = [f"  {service_name}:"]
-            lines.append("    build:")
-            lines.append("      context: .")
-            lines.append("      dockerfile: ./src/workers/Dockerfile")
-            lines.append(f"    container_name: {service_name}")
-            lines.append("    networks:")
-            lines.append("      - middleware-network")
-            lines.append("    depends_on:")
-            lines.append("      rabbitmq:")
-            lines.append("        condition: service_healthy")
+        plural = "instancias" if total_count != 1 else "instancia"
+        sections.append(f"  # {display_name} ({total_count} {plural})")
 
-            environment: Dict[str, str] = {k: str(v) for k, v in common_env.items()}
+        worker_id_counter = 0
+        for group_index, group in enumerate(groups, start=1):
+            if group.count == 0:
+                continue
 
-            if meta["needs_worker_id"]:
-                environment["WORKER_ID"] = str(index)
+            for instance_index in range(1, group.count + 1):
+                worker_id_counter += 1
+                service_name = build_service_name(
+                    base_service,
+                    total_count,
+                    group.name_suffix if isinstance(group.name_suffix, str) else None,
+                    worker_id_counter,
+                    instance_index,
+                )
 
-            if meta["supports_prefetch"]:
-                environment["PREFETCH_COUNT"] = str(worker_cfg["prefetch_count"])
+                lines = [f"  {service_name}:"]
+                lines.append("    build:")
+                lines.append("      context: .")
+                lines.append("      dockerfile: ./src/workers/Dockerfile")
+                lines.append(f"    container_name: {service_name}")
+                lines.append("    networks:")
+                lines.append("      - middleware-network")
+                lines.append("    depends_on:")
+                lines.append("      rabbitmq:")
+                lines.append("        condition: service_healthy")
 
-            if environment:
-                lines.append("    environment:")
-                lines.extend(format_environment(environment))
+                environment = {k: str(v) for k, v in common_env.items()}
+                environment.update(group.environment)
 
-            command = format_command(meta["command"])
-            lines.append(f"    command: {command}")
-            lines.append("    restart: unless-stopped")
+                if meta["needs_worker_id"]:
+                    environment["WORKER_ID"] = str(worker_id_counter)
 
-            sections.append("\n".join(lines))
+                if meta["supports_prefetch"] and group.prefetch_count is not None:
+                    environment["PREFETCH_COUNT"] = str(group.prefetch_count)
+
+                if environment:
+                    lines.append("    environment:")
+                    lines.extend(format_environment(environment))
+
+                command = format_command(meta["command"])
+                lines.append(f"    command: {command}")
+                lines.append("    restart: unless-stopped")
+
+                sections.append("\n".join(lines))
 
         sections.append("")  # Blank line between worker groups
 
@@ -203,7 +534,9 @@ def generate_compose(config: Dict[str, object]) -> str:
     worker_settings = load_worker_settings(raw_workers)
     worker_sections = generate_worker_sections(worker_settings, common_env)
 
-    compose_parts = [BASE_HEADER.rstrip()]
+    base_services = render_base_services(config.get("service_environment"))
+
+    compose_parts = ["version: '3.8'", "", base_services.rstrip()]
     if worker_sections:
         compose_parts.append("")
         compose_parts.append("\n".join(worker_sections).rstrip())

@@ -73,7 +73,7 @@ docker-compose logs -f results-worker
 
 ### Escalar dinámicamente la cantidad de workers
 
-1. Modificar `workers_config.json` indicando la cantidad deseada para cada worker (por ejemplo `year_filter`, `time_filter`, `amount_filter`, `results`).
+1. Modificar `workers_config.json` indicando la cantidad y las colas (por grupo) para cada worker (por ejemplo `year_filter`, `time_filter`, `amount_filter`, `results`).
 2. Ejecutar `./run_scaled.sh` (opcionalmente pasando una ruta de config distinta: `./run_scaled.sh otra_config.json`).
 3. El script genera `docker-compose-scaled.yml` automáticamente y levanta los servicios con Docker Compose.
 
@@ -104,6 +104,10 @@ mkdir -p src/client/.data/transaction_items
 - `RABBITMQ_PORT`: Puerto de RabbitMQ (default: 5672)
 - `GATEWAY_HOST`: Host del gateway (default: localhost)
 - `GATEWAY_PORT`: Puerto del gateway (default: 12345)
+- `INPUT_QUEUE`: Cola desde la que consume cada worker (se define por contenedor en `workers_config.json`).
+- `OUTPUT_QUEUE`: Cola a la que publica cada worker o el gateway (cuando aplica, se define por contenedor en `workers_config.json`).
+- `PREFETCH_COUNT`: Prefetch que usa cada worker para RabbitMQ (configurable por grupo en `workers_config.json`).
+- `WORKER_ID`: Identificador único que reciben los workers con múltiples instancias.
 
 ### Colas de RabbitMQ
 
@@ -111,6 +115,30 @@ mkdir -p src/client/.data/transaction_items
 - `transactions_year_filtered`: Cola intermedia después del filtro de año
 - `transactions_time_filtered`: Cola intermedia después del filtro de hora
 - `transactions_final_results`: Cola final con resultados
+
+### workers_config.json
+
+El archivo `workers_config.json` define las variables de entorno que recibe cada servicio al generar `docker-compose-scaled.yml`.
+
+- `service_environment` permite fijar colas del gateway (por ejemplo `OUTPUT_QUEUE`).
+- Cada worker puede declararse en uno o más `groups`, asignando `count`, colas (`INPUT_QUEUE`/`OUTPUT_QUEUE`) y, opcionalmente, `prefetch_count` o un `name_suffix` para distinguir grupos.
+
+Ejemplo abreviado con dos grupos para el mismo worker:
+
+```json
+{
+  "workers": {
+    "year_filter": {
+      "groups": [
+        {"count": 3, "name_suffix": "ab", "environment": {"INPUT_QUEUE": "queue_a", "OUTPUT_QUEUE": "queue_b"}},
+        {"count": 3, "name_suffix": "cd", "environment": {"INPUT_QUEUE": "queue_c", "OUTPUT_QUEUE": "queue_d"}}
+      ]
+    }
+  }
+}
+```
+
+Cada grupo genera instancias independientes con las colas indicadas, lo que permite correr pipelines paralelos sin duplicar Dockerfiles ni código.
 
 ## Desarrollo
 

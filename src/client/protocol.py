@@ -67,11 +67,6 @@ def recv_all(sock: socket.socket, length: int) -> bytes:
         data += chunk
     return data
 
-def pack_string(text: str) -> bytes:
-    """Pack string with length prefix (4 bytes + string)"""
-    encoded = text.encode('utf-8')
-    return pack_uint32(len(encoded)) + encoded
-
 def serialize_transaction(row: Dict[str, Any]) -> bytes:
     """Serialize transaction row to bytes"""
     data = b''

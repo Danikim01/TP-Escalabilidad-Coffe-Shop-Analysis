@@ -20,9 +20,9 @@ class YearFilterWorker:
         self.rabbitmq_host = os.getenv('RABBITMQ_HOST', 'localhost')
         self.rabbitmq_port = int(os.getenv('RABBITMQ_PORT', 5672))
         
-        # Colas de entrada y salida
-        self.input_queue = 'transactions_raw'
-        self.output_queue = 'transactions_year_filtered'
+        # Colas de entrada y salida configurables por entorno
+        self.input_queue = os.getenv('INPUT_QUEUE', 'transactions_raw')
+        self.output_queue = os.getenv('OUTPUT_QUEUE', 'transactions_year_filtered')
         
         # Configuración de prefetch para load balancing
         self.prefetch_count = int(os.getenv('PREFETCH_COUNT', 10))

@@ -35,10 +35,13 @@ class CoffeeShopGateway:
         self.rabbitmq_host = os.getenv('RABBITMQ_HOST', 'localhost')
         self.rabbitmq_port = int(os.getenv('RABBITMQ_PORT', 5672))
         
+        # Cola de salida configurable para enviar transacciones
+        self.transactions_queue_name = os.getenv('OUTPUT_QUEUE', 'transactions_raw')
+
         # Middleware para enviar transacciones a la cola de procesamiento
         self.transactions_queue = RabbitMQMiddlewareQueue(
             host=self.rabbitmq_host,
-            queue_name='transactions_raw',
+            queue_name=self.transactions_queue_name,
             port=self.rabbitmq_port
         )
         
@@ -131,7 +134,7 @@ class CoffeeShopGateway:
             if data_type == DataType.TRANSACTIONS:
                 # logger.info(f"Enviando {len(rows)} transacciones a la cola de procesamiento")
                 try:
-                    # Enviar cada transacción individualmente a la cola
+                    # Enviar cada transacción individualmente a la cola configurada
                     for transaction in rows:
                         self.transactions_queue.send(transaction)
                     # logger.info(f"Enviadas {len(rows)} transacciones a la cola de procesamiento")

@@ -19,8 +19,8 @@ class ResultsWorker:
         self.rabbitmq_host = os.getenv('RABBITMQ_HOST', 'localhost')
         self.rabbitmq_port = int(os.getenv('RABBITMQ_PORT', 5672))
         
-        # Cola de entrada
-        self.input_queue = 'transactions_final_results'
+        # Cola de entrada configurable por entorno
+        self.input_queue = os.getenv('INPUT_QUEUE', 'transactions_final_results')
         
         # Configuración de prefetch para load balancing
         self.prefetch_count = int(os.getenv('PREFETCH_COUNT', 10))

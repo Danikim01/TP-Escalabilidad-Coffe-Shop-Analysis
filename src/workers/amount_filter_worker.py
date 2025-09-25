@@ -19,9 +19,9 @@ class AmountFilterWorker:
         self.rabbitmq_host = os.getenv('RABBITMQ_HOST', 'localhost')
         self.rabbitmq_port = int(os.getenv('RABBITMQ_PORT', 5672))
         
-        # Colas de entrada y salida
-        self.input_queue = 'transactions_time_filtered'
-        self.output_queue = 'transactions_final_results'
+        # Colas de entrada y salida configurables por entorno
+        self.input_queue = os.getenv('INPUT_QUEUE', 'transactions_time_filtered')
+        self.output_queue = os.getenv('OUTPUT_QUEUE', 'transactions_final_results')
         
         # Configuración de prefetch para load balancing
         self.prefetch_count = int(os.getenv('PREFETCH_COUNT', 10))

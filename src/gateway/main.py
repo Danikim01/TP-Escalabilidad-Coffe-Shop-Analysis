@@ -43,7 +43,7 @@ class CoffeeShopGateway:
             port=self.rabbitmq_port
         )
         
-        logger.info(f"Gateway configurado con RabbitMQ: {self.rabbitmq_host}:{self.rabbitmq_port}")
+        # logger.info(f"Gateway configurado con RabbitMQ: {self.rabbitmq_host}:{self.rabbitmq_port}")
     
     def start_server(self):
         """Start the gateway server"""
@@ -54,12 +54,12 @@ class CoffeeShopGateway:
             self.socket.listen(5)
             self.running = True
             
-            logger.info(f"Gateway server started on port {self.port}")
+            #logger.info(f"Gateway server started on port {self.port}")
             
             while self.running:
                 try:
                     client_socket, address = self.socket.accept()
-                    logger.info(f"New client connected from {address}")
+                    # logger.info(f"New client connected from {address}")
                     
                     # Handle client in a separate thread
                     client_thread = threading.Thread(
@@ -92,7 +92,7 @@ class CoffeeShopGateway:
                 try:
                     # Receive message
                     message_type, message_data = receive_message(client_socket)
-                    logger.debug(f"Received message type {message_type}, data size {len(message_data)}")
+                    #logger.debug(f"Received message type {message_type}, data size {len(message_data)}")
                     
                     if message_type == MessageType.BATCH:
                         self.handle_batch_message(client_socket, message_data)
@@ -126,16 +126,16 @@ class CoffeeShopGateway:
         try:
             data_type, rows = parse_batch_message(message_data)
             
-            logger.info(f"Received batch: type={data_type.name}, size={len(rows)}")
+            # logger.info(f"Received batch: type={data_type.name}, size={len(rows)}")
             
             # Si son transacciones, enviarlas a la cola de procesamiento
             if data_type == DataType.TRANSACTIONS:
-                logger.info(f"Enviando {len(rows)} transacciones a la cola de procesamiento")
+                # logger.info(f"Enviando {len(rows)} transacciones a la cola de procesamiento")
                 try:
                     # Enviar cada transacción individualmente a la cola
                     for transaction in rows:
                         self.transactions_queue.send(transaction)
-                    logger.info(f"Enviadas {len(rows)} transacciones a la cola de procesamiento")
+                    # logger.info(f"Enviadas {len(rows)} transacciones a la cola de procesamiento")
                 except Exception as e:
                     logger.error(f"Error enviando transacciones a RabbitMQ: {e}")
             

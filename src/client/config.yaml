@@ -5,7 +5,7 @@ gateway:
 
 batch:
   # Maximum batch size in kilobytes
-  max_size_kb: 64
+  max_size_kb: 512
 
 logging:
   level: "INFO"

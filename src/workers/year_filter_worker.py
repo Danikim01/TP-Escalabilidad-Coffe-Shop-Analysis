@@ -24,6 +24,9 @@ class YearFilterWorker:
         self.input_queue = 'transactions_raw'
         self.output_queue = 'transactions_year_filtered'
         
+        # Configuración de prefetch para load balancing
+        self.prefetch_count = int(os.getenv('PREFETCH_COUNT', 10))
+        
         # Middleware para recibir datos
         self.input_middleware = RabbitMQMiddlewareQueue(
             host=self.rabbitmq_host,
@@ -38,7 +41,7 @@ class YearFilterWorker:
             port=self.rabbitmq_port
         )
         
-        logger.info(f"YearFilterWorker inicializado - Input: {self.input_queue}, Output: {self.output_queue}")
+        # Worker inicializado sin logs para optimización
     
     def filter_by_year(self, transaction):
         """
@@ -63,11 +66,9 @@ class YearFilterWorker:
             # Filtrar por años 2024 y 2025
             return year in [2024, 2025]
             
-        except ValueError as e:
-            logger.warning(f"Error parseando fecha '{created_at}': {e}")
+        except ValueError:
             return False
-        except Exception as e:
-            logger.error(f"Error inesperado filtrando transacción: {e}")
+        except Exception:
             return False
     
     def process_transaction(self, transaction):
@@ -82,12 +83,9 @@ class YearFilterWorker:
             if self.filter_by_year(transaction):
                 # Enviar transacción filtrada al siguiente worker
                 self.output_middleware.send(transaction)
-                logger.debug(f"Transacción {transaction.get('transaction_id', 'unknown')} pasó filtro de año")
-            else:
-                logger.debug(f"Transacción {transaction.get('transaction_id', 'unknown')} no pasó filtro de año")
                 
-        except Exception as e:
-            logger.error(f"Error procesando transacción: {e}")
+        except Exception:
+            pass
     
     def process_batch(self, batch):
         """
@@ -97,23 +95,17 @@ class YearFilterWorker:
             batch: Lista de transacciones
         """
         try:
-            filtered_count = 0
-            total_count = len(batch)
-            
             for transaction in batch:
                 if self.filter_by_year(transaction):
                     self.output_middleware.send(transaction)
-                    filtered_count += 1
             
-            logger.info(f"Procesado lote: {filtered_count}/{total_count} transacciones pasaron filtro de año")
-            
-        except Exception as e:
-            logger.error(f"Error procesando lote: {e}")
+        except Exception:
+            pass
     
     def start_consuming(self):
         """Inicia el consumo de mensajes de la cola de entrada."""
         try:
-            logger.info("Iniciando YearFilterWorker...")
+            # Iniciando worker sin logs para optimización
             
             def on_message(message):
                 """Callback para procesar mensajes recibidos."""
@@ -125,16 +117,16 @@ class YearFilterWorker:
                         # Es una transacción individual
                         self.process_transaction(message)
                         
-                except Exception as e:
-                    logger.error(f"Error en callback de mensaje: {e}")
+                except Exception:
+                    pass
             
             # Iniciar consumo
             self.input_middleware.start_consuming(on_message)
             
         except KeyboardInterrupt:
-            logger.info("Recibida señal de interrupción")
-        except Exception as e:
-            logger.error(f"Error iniciando consumo: {e}")
+            pass
+        except Exception:
+            pass
         finally:
             self.cleanup()
     

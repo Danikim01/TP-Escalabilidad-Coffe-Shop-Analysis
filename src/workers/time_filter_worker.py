@@ -24,6 +24,9 @@ class TimeFilterWorker:
         self.input_queue = 'transactions_year_filtered'
         self.output_queue = 'transactions_time_filtered'
         
+        # Configuración de prefetch para load balancing
+        self.prefetch_count = int(os.getenv('PREFETCH_COUNT', 10))
+        
         # Middleware para recibir datos
         self.input_middleware = RabbitMQMiddlewareQueue(
             host=self.rabbitmq_host,
@@ -37,13 +40,14 @@ class TimeFilterWorker:
             queue_name=self.output_queue,
             port=self.rabbitmq_port
         )
-        
+
+    
         # Definir rango de horas (06:00 AM - 11:00 PM)
         self.start_time = time(6, 0)   # 06:00 AM
         self.end_time = time(23, 0)    # 11:00 PM (23:00)
         
-        logger.info(f"TimeFilterWorker inicializado - Input: {self.input_queue}, Output: {self.output_queue}")
-        logger.info(f"Filtro de hora: {self.start_time} - {self.end_time}")
+        # Worker inicializado sin logs para optimización
+        # Filtro de hora configurado
     
     def filter_by_time(self, transaction):
         """
@@ -69,11 +73,9 @@ class TimeFilterWorker:
             # Considerar que 11:00 PM es 23:00, así que el rango es 06:00-23:00
             return self.start_time <= transaction_time <= self.end_time
             
-        except ValueError as e:
-            logger.warning(f"Error parseando fecha/hora '{created_at}': {e}")
+        except ValueError:
             return False
-        except Exception as e:
-            logger.error(f"Error inesperado filtrando transacción: {e}")
+        except Exception:
             return False
     
     def process_transaction(self, transaction):
@@ -88,12 +90,12 @@ class TimeFilterWorker:
             if self.filter_by_time(transaction):
                 # Enviar transacción filtrada al siguiente worker
                 self.output_middleware.send(transaction)
-                logger.debug(f"Transacción {transaction.get('transaction_id', 'unknown')} pasó filtro de hora")
+                pass
             else:
-                logger.debug(f"Transacción {transaction.get('transaction_id', 'unknown')} no pasó filtro de hora")
+                pass
                 
-        except Exception as e:
-            logger.error(f"Error procesando transacción: {e}")
+        except Exception:
+            pass
     
     def process_batch(self, batch):
         """
@@ -111,15 +113,15 @@ class TimeFilterWorker:
                     self.output_middleware.send(transaction)
                     filtered_count += 1
             
-            logger.info(f"Procesado lote: {filtered_count}/{total_count} transacciones pasaron filtro de hora")
+            # Lote procesado sin logs
             
-        except Exception as e:
-            logger.error(f"Error procesando lote: {e}")
+        except Exception:
+            pass
     
     def start_consuming(self):
         """Inicia el consumo de mensajes de la cola de entrada."""
         try:
-            logger.info("Iniciando TimeFilterWorker...")
+            # Iniciando worker sin logs para optimización
             
             def on_message(message):
                 """Callback para procesar mensajes recibidos."""
@@ -131,16 +133,16 @@ class TimeFilterWorker:
                         # Es una transacción individual
                         self.process_transaction(message)
                         
-                except Exception as e:
-                    logger.error(f"Error en callback de mensaje: {e}")
+                except Exception:
+                    pass
             
             # Iniciar consumo
             self.input_middleware.start_consuming(on_message)
             
         except KeyboardInterrupt:
-            logger.info("Recibida señal de interrupción")
-        except Exception as e:
-            logger.error(f"Error iniciando consumo: {e}")
+            pass
+        except Exception:
+            pass
         finally:
             self.cleanup()
     

@@ -22,6 +22,9 @@ class ResultsWorker:
         # Cola de entrada
         self.input_queue = 'transactions_final_results'
         
+        # Configuración de prefetch para load balancing
+        self.prefetch_count = int(os.getenv('PREFETCH_COUNT', 10))
+        
         # Middleware para recibir datos
         self.input_middleware = RabbitMQMiddlewareQueue(
             host=self.rabbitmq_host,

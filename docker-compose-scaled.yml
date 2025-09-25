@@ -1,0 +1,192 @@
+version: '3.8'
+
+services:
+  # RabbitMQ Server
+  rabbitmq:
+    image: rabbitmq:3.12-management
+    container_name: rabbitmq-server
+    ports:
+      - "5672:5672"    # AMQP port
+      - "15672:15672"  # Management UI
+    environment:
+      RABBITMQ_DEFAULT_USER: guest
+      RABBITMQ_DEFAULT_PASS: guest
+    networks:
+      - middleware-network
+    healthcheck:
+      test: ["CMD", "rabbitmq-diagnostics", "ping"]
+      interval: 30s
+      timeout: 10s
+      retries: 5
+    volumes:
+      - rabbitmq_data:/var/lib/rabbitmq
+
+  # Gateway Service
+  gateway:
+    build:
+      context: .
+      dockerfile: ./src/gateway/Dockerfile
+    container_name: coffee-gateway
+    ports:
+      - "12345:12345"  # Gateway port
+    networks:
+      - middleware-network
+    depends_on:
+      rabbitmq:
+        condition: service_healthy
+    environment:
+      - RABBITMQ_HOST=rabbitmq
+      - RABBITMQ_PORT=5672
+    restart: unless-stopped
+
+  # Client Service
+  client:
+    build:
+      context: ./src/client
+      dockerfile: Dockerfile
+    container_name: coffee-client
+    networks:
+      - middleware-network
+    depends_on:
+      - gateway
+      - rabbitmq
+    environment:
+      - GATEWAY_HOST=gateway
+      - GATEWAY_PORT=12345
+    volumes:
+      - ./src/client/.data:/app/.data 
+
+  # Year Filter Workers (2 instancias)
+  year-filter-worker-1:
+    build:
+      context: .
+      dockerfile: ./src/workers/Dockerfile
+    container_name: year-filter-worker-1
+    networks:
+      - middleware-network
+    depends_on:
+      rabbitmq:
+        condition: service_healthy
+    environment:
+      - RABBITMQ_HOST=rabbitmq
+      - RABBITMQ_PORT=5672
+      - WORKER_ID=1
+      - PREFETCH_COUNT=20
+    command: ["python", "year_filter_worker.py"]
+    restart: unless-stopped
+
+  year-filter-worker-2:
+    build:
+      context: .
+      dockerfile: ./src/workers/Dockerfile
+    container_name: year-filter-worker-2
+    networks:
+      - middleware-network
+    depends_on:
+      rabbitmq:
+        condition: service_healthy
+    environment:
+      - RABBITMQ_HOST=rabbitmq
+      - RABBITMQ_PORT=5672
+      - WORKER_ID=2
+      - PREFETCH_COUNT=20
+    command: ["python", "year_filter_worker.py"]
+    restart: unless-stopped
+
+  # Time Filter Workers (2 instancias)
+  time-filter-worker-1:
+    build:
+      context: .
+      dockerfile: ./src/workers/Dockerfile
+    container_name: time-filter-worker-1
+    networks:
+      - middleware-network
+    depends_on:
+      rabbitmq:
+        condition: service_healthy
+    environment:
+      - RABBITMQ_HOST=rabbitmq
+      - RABBITMQ_PORT=5672
+      - WORKER_ID=1
+      - PREFETCH_COUNT=20
+    command: ["python", "time_filter_worker.py"]
+    restart: unless-stopped
+
+  time-filter-worker-2:
+    build:
+      context: .
+      dockerfile: ./src/workers/Dockerfile
+    container_name: time-filter-worker-2
+    networks:
+      - middleware-network
+    depends_on:
+      rabbitmq:
+        condition: service_healthy
+    environment:
+      - RABBITMQ_HOST=rabbitmq
+      - RABBITMQ_PORT=5672
+      - WORKER_ID=2
+      - PREFETCH_COUNT=20
+    command: ["python", "time_filter_worker.py"]
+    restart: unless-stopped
+
+  # Amount Filter Workers (2 instancias)
+  amount-filter-worker-1:
+    build:
+      context: .
+      dockerfile: ./src/workers/Dockerfile
+    container_name: amount-filter-worker-1
+    networks:
+      - middleware-network
+    depends_on:
+      rabbitmq:
+        condition: service_healthy
+    environment:
+      - RABBITMQ_HOST=rabbitmq
+      - RABBITMQ_PORT=5672
+      - WORKER_ID=1
+      - PREFETCH_COUNT=20
+    command: ["python", "amount_filter_worker.py"]
+    restart: unless-stopped
+
+  amount-filter-worker-2:
+    build:
+      context: .
+      dockerfile: ./src/workers/Dockerfile
+    container_name: amount-filter-worker-2
+    networks:
+      - middleware-network
+    depends_on:
+      rabbitmq:
+        condition: service_healthy
+    environment:
+      - RABBITMQ_HOST=rabbitmq
+      - RABBITMQ_PORT=5672
+      - WORKER_ID=2
+      - PREFETCH_COUNT=20
+    command: ["python", "amount_filter_worker.py"]
+    restart: unless-stopped
+
+  # Results Worker (1 instancia)
+  results-worker:
+    build:
+      context: .
+      dockerfile: ./src/workers/Dockerfile
+    container_name: results-worker
+    networks:
+      - middleware-network
+    depends_on:
+      rabbitmq:
+        condition: service_healthy
+    environment:
+      - RABBITMQ_HOST=rabbitmq
+      - RABBITMQ_PORT=5672
+    command: ["python", "results_worker.py"]
+    restart: unless-stopped
+
+networks:
+  middleware-network:
+    driver: bridge
+
+volumes:
+  rabbitmq_data:

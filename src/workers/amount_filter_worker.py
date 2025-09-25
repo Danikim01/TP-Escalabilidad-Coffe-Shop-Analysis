@@ -23,6 +23,9 @@ class AmountFilterWorker:
         self.input_queue = 'transactions_time_filtered'
         self.output_queue = 'transactions_final_results'
         
+        # Configuración de prefetch para load balancing
+        self.prefetch_count = int(os.getenv('PREFETCH_COUNT', 10))
+        
         # Middleware para recibir datos
         self.input_middleware = RabbitMQMiddlewareQueue(
             host=self.rabbitmq_host,
@@ -40,7 +43,7 @@ class AmountFilterWorker:
         # Monto mínimo requerido
         self.min_amount = 75.0
         
-        logger.info(f"AmountFilterWorker inicializado - Input: {self.input_queue}, Output: {self.output_queue}")
+        # Worker inicializado sin logs para optimización
         logger.info(f"Filtro de monto: >= {self.min_amount}")
     
     def filter_by_amount(self, transaction):
@@ -73,8 +76,7 @@ class AmountFilterWorker:
         except (ValueError, TypeError) as e:
             logger.warning(f"Error parseando monto de transacción: {e}")
             return False
-        except Exception as e:
-            logger.error(f"Error inesperado filtrando transacción: {e}")
+        except Exception:
             return False
     
     def process_transaction(self, transaction):
@@ -98,12 +100,12 @@ class AmountFilterWorker:
                 
                 # Enviar resultado al final
                 self.output_middleware.send(result)
-                logger.debug(f"Transacción {transaction.get('transaction_id', 'unknown')} pasó filtro de monto")
+                pass
             else:
-                logger.debug(f"Transacción {transaction.get('transaction_id', 'unknown')} no pasó filtro de monto")
+                pass
                 
-        except Exception as e:
-            logger.error(f"Error procesando transacción: {e}")
+        except Exception:
+            pass
     
     def process_batch(self, batch):
         """
@@ -130,15 +132,15 @@ class AmountFilterWorker:
                     self.output_middleware.send(result)
                     filtered_count += 1
             
-            logger.info(f"Procesado lote: {filtered_count}/{total_count} transacciones pasaron filtro de monto")
+            # Lote procesado sin logs
             
-        except Exception as e:
-            logger.error(f"Error procesando lote: {e}")
+        except Exception:
+            pass
     
     def start_consuming(self):
         """Inicia el consumo de mensajes de la cola de entrada."""
         try:
-            logger.info("Iniciando AmountFilterWorker...")
+            # Iniciando worker sin logs para optimización
             
             def on_message(message):
                 """Callback para procesar mensajes recibidos."""
@@ -150,16 +152,16 @@ class AmountFilterWorker:
                         # Es una transacción individual
                         self.process_transaction(message)
                         
-                except Exception as e:
-                    logger.error(f"Error en callback de mensaje: {e}")
+                except Exception:
+                    pass
             
             # Iniciar consumo
             self.input_middleware.start_consuming(on_message)
             
         except KeyboardInterrupt:
-            logger.info("Recibida señal de interrupción")
-        except Exception as e:
-            logger.error(f"Error iniciando consumo: {e}")
+            pass
+        except Exception:
+            pass
         finally:
             self.cleanup()
     

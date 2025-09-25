@@ -21,6 +21,41 @@ services:
     volumes:
       - rabbitmq_data:/var/lib/rabbitmq
 
+  # Gateway Service
+  gateway:
+    build:
+      context: ./src/gateway
+      dockerfile: Dockerfile
+    container_name: coffee-gateway
+    ports:
+      - "12345:12345"  # Gateway port
+    networks:
+      - middleware-network
+    depends_on:
+      rabbitmq:
+        condition: service_healthy
+    environment:
+      - RABBITMQ_HOST=rabbitmq
+      - RABBITMQ_PORT=5672
+    restart: unless-stopped
+
+  # Client Service
+  client:
+    build:
+      context: ./src/client
+      dockerfile: Dockerfile
+    container_name: coffee-client
+    networks:
+      - middleware-network
+    depends_on:
+      - gateway
+      - rabbitmq
+    environment:
+      - GATEWAY_HOST=gateway
+      - GATEWAY_PORT=12345
+    volumes:
+      - ./src/client/.data:/app/.data 
+
   # Test Environment
   test-env:
     build:

@@ -80,8 +80,9 @@ WORKER_DEFINITIONS: Dict[str, WorkerDefinition] = {
         "default_prefetch": None,
         "default_environment": {
             "INPUT_QUEUE": "transactions_final_results",
+            "OUTPUT_QUEUE": "client_results",
         },
-        "required_environment": ["INPUT_QUEUE"],
+        "required_environment": ["INPUT_QUEUE", "OUTPUT_QUEUE"],
     },
 }
 
@@ -94,6 +95,9 @@ SERVICE_ENV_DEFAULTS: Dict[str, Dict[str, str]] = {
     "client": {
         "GATEWAY_HOST": "gateway",
         "GATEWAY_PORT": "12345",
+        "RABBITMQ_HOST": "rabbitmq",
+        "RABBITMQ_PORT": "5672",
+        "CLIENT_RESULTS_QUEUE": "client_results",
     },
 }
 

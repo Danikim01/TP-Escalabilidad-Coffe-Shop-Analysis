@@ -1,0 +1,23 @@
+{
+  "common_environment": {
+    "RABBITMQ_HOST": "rabbitmq",
+    "RABBITMQ_PORT": 5672
+  },
+  "workers": {
+    "year_filter": {
+      "count": 2,
+      "prefetch_count": 20
+    },
+    "time_filter": {
+      "count": 2,
+      "prefetch_count": 20
+    },
+    "amount_filter": {
+      "count": 2,
+      "prefetch_count": 20
+    },
+    "results": {
+      "count": 1
+    }
+  }
+}

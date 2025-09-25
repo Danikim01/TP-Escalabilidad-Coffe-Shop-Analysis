@@ -71,6 +71,12 @@ docker-compose logs -f amount-filter-worker
 docker-compose logs -f results-worker
 ```
 
+### Escalar dinámicamente la cantidad de workers
+
+1. Modificar `workers_config.json` indicando la cantidad deseada para cada worker (por ejemplo `year_filter`, `time_filter`, `amount_filter`, `results`).
+2. Ejecutar `./run_scaled.sh` (opcionalmente pasando una ruta de config distinta: `./run_scaled.sh otra_config.json`).
+3. El script genera `docker-compose-scaled.yml` automáticamente y levanta los servicios con Docker Compose.
+
 ### Probar el Sistema
 
 1. **Colocar archivos CSV en la carpeta de datos**:

@@ -38,6 +38,9 @@ class CoffeeShopGateway:
         # Cola para recibir resultados procesados desde ResultsWorker
         self.results_queue_name = os.getenv('RESULTS_QUEUE', 'gateway_results')
 
+        # Chunking configuration
+        self.chunk_size = int(os.getenv('CHUNK_SIZE', 100))
+
         # Middleware para enviar transacciones a la cola de procesamiento
         self.transactions_queue = RabbitMQMiddlewareQueue(
             host=self.rabbitmq_host,
@@ -45,7 +48,18 @@ class CoffeeShopGateway:
             port=self.rabbitmq_port
         )
         
-        # logger.info(f"Gateway configurado con RabbitMQ: {self.rabbitmq_host}:{self.rabbitmq_port}")
+        logger.info(f"Gateway configurado con RabbitMQ: {self.rabbitmq_host}:{self.rabbitmq_port}")
+        logger.info(f"Cola de transacciones: {self.transactions_queue_name}")
+        logger.info(f"Cola de resultados: {self.results_queue_name}")
+        logger.info(f"Chunking configurado: {self.chunk_size} transacciones por chunk")
+    
+    def create_chunks(self, transactions):
+        """Divide las transacciones en chunks para procesamiento optimizado"""
+        chunks = []
+        for i in range(0, len(transactions), self.chunk_size):
+            chunk = transactions[i:i + self.chunk_size]
+            chunks.append(chunk)
+        return chunks
     
     def start_server(self):
         """Start the gateway server"""
@@ -88,19 +102,22 @@ class CoffeeShopGateway:
             logger.info("Gateway server stopped")
     
     def handle_client(self, client_socket: socket.socket, address):
-        """Handle a client connection"""
+        """Handle a client connection with parallel result processing"""
         eof_received = {
             DataType.USERS: False,
             DataType.TRANSACTIONS: False,
             DataType.TRANSACTION_ITEMS: False
         }
+        
+        # Flag para controlar el inicio del consumo de resultados
+        results_consuming_started = False
 
         try:
             while self.running:
                 try:
                     # Receive message
                     message_type, message_data = receive_message(client_socket)
-                    #logger.debug(f"Received message type {message_type}, data size {len(message_data)}")
+                    # logger.debug(f"Received message type {message_type}, data size {len(message_data)}")
                     
                     if message_type == MessageType.BATCH:
                         self.handle_batch_message(client_socket, message_data)
@@ -149,14 +166,20 @@ class CoffeeShopGateway:
             
             # Si son transacciones, enviarlas a la cola de procesamiento
             if data_type == DataType.TRANSACTIONS:
-                # logger.info(f"Enviando {len(rows)} transacciones a la cola de procesamiento")
+                logger.info(f"Procesando {len(rows)} transacciones con chunking (chunk_size={self.chunk_size})")
                 try:
-                    # Enviar cada transacción individualmente a la cola configurada
-                    for transaction in rows:
-                        self.transactions_queue.send(transaction)
-                    # logger.info(f"Enviadas {len(rows)} transacciones a la cola de procesamiento")
+                    # Crear chunks de transacciones para procesamiento optimizado
+                    chunks = self.create_chunks(rows)
+                    logger.info(f"Creando {len(chunks)} chunks de transacciones")
+                    
+                    # Enviar cada chunk completo a la cola
+                    for i, chunk in enumerate(chunks):
+                        self.transactions_queue.send(chunk)
+                        logger.info(f"Enviado chunk {i+1}/{len(chunks)} con {len(chunk)} transacciones")
+                    
+                    logger.info(f"Enviados {len(chunks)} chunks con {len(rows)} transacciones totales")
                 except Exception as e:
-                    logger.error(f"Error enviando transacciones a RabbitMQ: {e}")
+                    logger.error(f"Error enviando chunks a RabbitMQ: {e}")
             
             # Send success response
             send_response(client_socket, True)
@@ -241,6 +264,7 @@ class CoffeeShopGateway:
                 return
 
             try:
+                logger.info(f"Gateway enviando resultado al cliente: {payload}")
                 self._send_json_line(client_socket, payload)
             except Exception as exc:
                 logger.error(f"Failed to forward result to client: {exc}")
@@ -248,6 +272,7 @@ class CoffeeShopGateway:
 
         def on_message(message: Any) -> None:
             try:
+                logger.debug(f"Gateway recibió mensaje de results queue: {type(message)} - {message}")
                 handle_payload(message)
             except Exception as exc:  # noqa: BLE001
                 logger.error(f"Unexpected error forwarding results: {exc}")

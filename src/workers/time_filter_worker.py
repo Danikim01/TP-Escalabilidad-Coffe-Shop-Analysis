@@ -24,6 +24,20 @@ class TimeFilterWorker:
         # Colas de entrada y salida configurables por entorno
         self.input_queue = os.getenv('INPUT_QUEUE', 'transactions_year_filtered')
         self.output_queue = os.getenv('OUTPUT_QUEUE', 'transactions_time_filtered')
+
+        # Permitir fan-out a múltiples colas configuradas por coma
+        raw_output_queues = os.getenv('OUTPUT_QUEUES')
+        if raw_output_queues:
+            queue_names = [name.strip() for name in raw_output_queues.split(',') if name.strip()]
+        else:
+            queue_names = []
+
+        if not queue_names:
+            queue_names = [self.output_queue]
+        elif self.output_queue and self.output_queue not in queue_names:
+            # Mantener compatibilidad si OUTPUT_QUEUE también está configurado
+            queue_names.insert(0, self.output_queue)
+        self.output_queue_names = queue_names
         
         # Configuración de prefetch para load balancing
         self.prefetch_count = int(os.getenv('PREFETCH_COUNT', 10))
@@ -36,12 +50,15 @@ class TimeFilterWorker:
             prefetch_count=self.prefetch_count
         )
         
-        # Middleware para enviar datos filtrados
-        self.output_middleware = RabbitMQMiddlewareQueue(
-            host=self.rabbitmq_host,
-            queue_name=self.output_queue,
-            port=self.rabbitmq_port
-        )
+        # Middleware para enviar datos filtrados a cada destino configurado
+        self.output_middlewares = [
+            RabbitMQMiddlewareQueue(
+                host=self.rabbitmq_host,
+                queue_name=queue_name,
+                port=self.rabbitmq_port
+            )
+            for queue_name in self.output_queue_names
+        ]
 
     
         # Definir rango de horas (06:00 AM - 11:00 PM)
@@ -93,8 +110,9 @@ class TimeFilterWorker:
         try:
             # Aplicar filtro de hora
             if self.filter_by_time(transaction):
-                # Enviar transacción filtrada al siguiente worker
-                self.output_middleware.send(transaction)
+                # Enviar transacción filtrada a todos los destinos configurados
+                for middleware in self.output_middlewares:
+                    middleware.send(transaction)
                 pass
             else:
                 pass
@@ -119,7 +137,8 @@ class TimeFilterWorker:
             
             # Enviar chunk filtrado si tiene transacciones
             if filtered_transactions:
-                self.output_middleware.send(filtered_transactions)
+                for middleware in self.output_middlewares:
+                    middleware.send(filtered_transactions)
             
         except Exception:
             pass
@@ -133,7 +152,8 @@ class TimeFilterWorker:
                 """Callback para procesar mensajes recibidos."""
                 try:
                     if self._is_eof(message):
-                        self.output_middleware.send({'type': 'EOF'})
+                        for middleware in self.output_middlewares:
+                            middleware.send({'type': 'EOF'})
                         self.input_middleware.stop_consuming()
                         return
 
@@ -161,7 +181,8 @@ class TimeFilterWorker:
         """Limpia recursos."""
         try:
             self.input_middleware.close()
-            self.output_middleware.close()
+            for middleware in self.output_middlewares:
+                middleware.close()
             logger.info("Recursos limpiados")
         except Exception as e:
             logger.warning(f"Error limpiando recursos: {e}")

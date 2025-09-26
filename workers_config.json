@@ -31,7 +31,8 @@
           "count": 2,
           "environment": {
             "INPUT_QUEUE": "transactions_year_filtered",
-            "OUTPUT_QUEUE": "transactions_time_filtered"
+            "OUTPUT_QUEUE": "transactions_time_filtered",
+            "OUTPUT_QUEUES": "transactions_time_filtered,transactions_time_filtered_tpv"
           }
         }
       ]
@@ -44,6 +45,18 @@
           "environment": {
             "INPUT_QUEUE": "transactions_time_filtered",
             "OUTPUT_QUEUE": "transactions_final_results"
+          }
+        }
+      ]
+    },
+    "tpv": {
+      "prefetch_count": 20,
+      "groups": [
+        {
+          "count": 1,
+          "environment": {
+            "INPUT_QUEUE": "transactions_time_filtered_tpv",
+            "OUTPUT_QUEUE": "gateway_results"
           }
         }
       ]

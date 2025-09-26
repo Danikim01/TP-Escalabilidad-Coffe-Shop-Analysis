@@ -75,6 +75,7 @@ class CoffeeShopClient:
         self.socket: socket.socket | None = None
         self.results_received = 0
         self._results_header_printed = False
+        self._tpv_header_printed = False
 
         logger.info(
             f"Client configured - Gateway: {self.gateway_host}:{self.gateway_port}, "
@@ -123,9 +124,14 @@ class CoffeeShopClient:
 
         # Allow special control messages to stop consumption
         message_type = result.get('type')
-        if message_type and str(message_type).upper() == 'EOF':
-            logger.info("Received EOF control message from results stream")
-            return False
+        if message_type:
+            normalized_type = str(message_type).upper()
+            if normalized_type == 'EOF':
+                logger.info("Received EOF control message from results stream")
+                return False
+            if normalized_type == 'TPV_SUMMARY':
+                self._render_tpv_summary(result)
+                return True
 
         self.results_received += 1
         self._print_results_header()
@@ -149,6 +155,44 @@ class CoffeeShopClient:
         )
 
         return True
+
+    def _print_tpv_header(self) -> None:
+        if self._tpv_header_printed:
+            return
+
+        print("=" * 60)
+        print("RESUMEN TPV POR SEMESTRE Y SUCURSAL (2024-2025)")
+        print("Transacciones entre las 06:00 y las 23:00")
+        print("=" * 60)
+        self._tpv_header_printed = True
+
+    def _render_tpv_summary(self, payload: Dict[str, Any]) -> None:
+        try:
+            results = payload.get('results') or []
+            self._print_tpv_header()
+
+            if not results:
+                print("Sin registros que cumplan las condiciones para calcular TPV.")
+                print("-" * 50)
+                logger.info("TPV summary received without results")
+                return
+
+            for entry in results:
+                store_id = entry.get('store_id', 'unknown')
+                year = entry.get('year', 'unknown')
+                semester = entry.get('semester', 'unknown')
+                try:
+                    tpv_value = float(entry.get('tpv', 0))
+                except (TypeError, ValueError):
+                    tpv_value = 0.0
+                print(f"Sucursal {store_id} - {year} {semester}: ${tpv_value:0.2f}")
+
+            print("-" * 50)
+            logger.info(
+                "Processed TPV summary with %s entries", len(results)
+            )
+        except Exception as exc:
+            logger.error(f"Failed to render TPV summary: {exc}")
 
     def _handle_results_message(self, message: Any) -> bool:
         """Handle stream messages that may contain individual or batched results.

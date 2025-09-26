@@ -65,13 +65,13 @@ class ResultsWorker:
             logger.error("Error procesando resultado: %s", exc)
 
     def process_batch(self, batch: List[Dict[str, Any]]) -> None:
-        """Procesa un lote de resultados y los reenvía al gateway."""
+        """Procesa un lote de resultados (chunk) y los reenvía al gateway como chunk."""
         try:
-            for result in batch:
-                self.process_result(result)
-            logger.info("Procesado lote de %s resultados", len(batch))
+            # Reenviar chunk completo al gateway
+            self.output_middleware.send(batch)
+            logger.info("Procesado chunk de %s resultados", len(batch))
         except Exception as exc:
-            logger.error("Error procesando lote de resultados: %s", exc)
+            logger.error("Error procesando chunk de resultados: %s", exc)
 
     def _handle_message(self, message: Any) -> None:
         """Procesa cualquier mensaje recibido desde la cola."""

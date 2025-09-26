@@ -104,18 +104,22 @@ class TimeFilterWorker:
     
     def process_batch(self, batch):
         """
-        Procesa un lote de transacciones (puede ser chunk o transacciones individuales).
-        Procesa y envía inmediatamente sin almacenar en memoria.
+        Procesa un lote de transacciones (chunk) y envía como chunk filtrado.
+        Optimizado para procesar chunks completos en lugar de transacciones individuales.
         
         Args:
-            batch: Lista de transacciones o chunk de transacciones
+            batch: Lista de transacciones (chunk)
         """
         try:
-            # Procesar cada transacción individualmente y enviar inmediatamente
-            # Sin almacenar en memoria (cumple restricción de cátedra)
+            # Filtrar transacciones del chunk
+            filtered_transactions = []
             for transaction in batch:
                 if self.filter_by_time(transaction):
-                    self.output_middleware.send(transaction)
+                    filtered_transactions.append(transaction)
+            
+            # Enviar chunk filtrado si tiene transacciones
+            if filtered_transactions:
+                self.output_middleware.send(filtered_transactions)
             
         except Exception:
             pass

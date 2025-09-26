@@ -114,18 +114,18 @@ class AmountFilterWorker:
     
     def process_batch(self, batch):
         """
-        Procesa un lote de transacciones (puede ser chunk o transacciones individuales).
-        Procesa y envía inmediatamente sin almacenar en memoria.
+        Procesa un lote de transacciones (chunk) y envía como chunk de resultados.
+        Optimizado para procesar chunks completos en lugar de transacciones individuales.
         
         Args:
-            batch: Lista de transacciones o chunk de transacciones
+            batch: Lista de transacciones (chunk)
         """
         try:
-            # Procesar cada transacción individualmente y enviar inmediatamente
-            # Sin almacenar en memoria (cumple restricción de cátedra)
+            # Filtrar transacciones del chunk y crear resultados
+            filtered_results = []
             for transaction in batch:
                 if self.filter_by_amount(transaction):
-                    # Crear resultado con solo ID y monto y enviar inmediatamente
+                    # Crear resultado con solo ID y monto
                     result = {
                         'transaction_id': transaction.get('transaction_id'),
                         'final_amount': transaction.get('final_amount'),
@@ -133,7 +133,11 @@ class AmountFilterWorker:
                         'discount_applied': transaction.get('discount_applied'),
                         'created_at': transaction.get('created_at')
                     }
-                    self.output_middleware.send(result)
+                    filtered_results.append(result)
+            
+            # Enviar chunk de resultados si tiene elementos
+            if filtered_results:
+                self.output_middleware.send(filtered_results)
             
         except Exception:
             pass

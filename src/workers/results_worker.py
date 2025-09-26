@@ -30,6 +30,10 @@ class ResultsWorker:
         # Configuración de prefetch para load balancing
         self.prefetch_count = int(os.getenv("PREFETCH_COUNT", 10))
 
+        # Número de EOF esperados desde upstream
+        self.expected_eof_count = int(os.getenv("EXPECTED_EOF_COUNT", 1))
+        self._eof_seen = 0
+
         # Middleware para recibir datos
         self.input_middleware = RabbitMQMiddlewareQueue(
             host=self.rabbitmq_host,
@@ -76,11 +80,19 @@ class ResultsWorker:
     def _handle_message(self, message: Any) -> None:
         """Procesa cualquier mensaje recibido desde la cola."""
         if is_eof_message(message):
-            logger.info("Recibido EOF en ResultsWorker; reenviando al gateway")
-            try:
-                self.output_middleware.send({"type": "EOF"})
-            finally:
-                self.input_middleware.stop_consuming()
+            self._eof_seen += 1
+            logger.info(
+                "Recibido EOF en ResultsWorker (%s/%s)",
+                self._eof_seen,
+                self.expected_eof_count,
+            )
+
+            if self._eof_seen >= self.expected_eof_count:
+                logger.info("Todos los EOF recibidos; reenviando EOF al gateway")
+                try:
+                    self.output_middleware.send({"type": "EOF"})
+                finally:
+                    self.input_middleware.stop_consuming()
             return
 
         if isinstance(message, list):

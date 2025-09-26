@@ -56,7 +56,7 @@
           "count": 1,
           "environment": {
             "INPUT_QUEUE": "transactions_time_filtered_tpv",
-            "OUTPUT_QUEUE": "gateway_results"
+            "OUTPUT_QUEUE": "transactions_final_results"
           }
         }
       ]
@@ -67,7 +67,8 @@
           "count": 1,
           "environment": {
             "INPUT_QUEUE": "transactions_final_results",
-            "OUTPUT_QUEUE": "gateway_results"
+            "OUTPUT_QUEUE": "gateway_results",
+            "EXPECTED_EOF_COUNT": 2
           }
         }
       ]

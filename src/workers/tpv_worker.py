@@ -30,7 +30,7 @@ class TPVWorker:
         self.rabbitmq_port = int(os.getenv('RABBITMQ_PORT', 5672))
 
         self.input_queue = os.getenv('INPUT_QUEUE', 'transactions_time_filtered_tpv')
-        self.output_queue = os.getenv('OUTPUT_QUEUE', 'gateway_results')
+        self.output_queue = os.getenv('OUTPUT_QUEUE', 'transactions_final_results')
 
         self.prefetch_count = int(os.getenv('PREFETCH_COUNT', 10))
 
@@ -91,6 +91,8 @@ class TPVWorker:
     def _emit_summary(self) -> None:
         if not self._totals:
             logger.info('TPVWorker sin datos para emitir resumen')
+            payload = {'type': 'tpv_summary', 'results': []}
+            self._send_payload(payload)
             return
 
         results = []
@@ -112,13 +114,14 @@ class TPVWorker:
             'results': results,
         }
 
+        self._send_payload(payload)
+        self._totals.clear()
+
+    def _send_payload(self, payload: Dict[str, Any]) -> None:
         try:
             self.output_middleware.send(payload)
-            logger.info('TPVWorker publicó resumen con %s combinaciones', len(results))
         except Exception as exc:  # noqa: BLE001
-            logger.error('Error enviando resumen de TPV: %s', exc)
-        finally:
-            self._totals.clear()
+            logger.error('Error enviando mensaje desde TPVWorker: %s', exc)
 
     def start_consuming(self) -> None:
         logger.info('TPVWorker consumiendo transacciones filtradas por tiempo')
@@ -127,6 +130,7 @@ class TPVWorker:
             try:
                 if _is_eof(message):
                     self._emit_summary()
+                    self._send_payload({'type': 'EOF', 'source': 'tpv'})
                     self.input_middleware.stop_consuming()
                     return
 

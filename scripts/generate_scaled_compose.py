@@ -80,7 +80,7 @@ WORKER_DEFINITIONS: Dict[str, WorkerDefinition] = {
         "default_prefetch": 20,
         "default_environment": {
             "INPUT_QUEUE": "transactions_time_filtered_tpv",
-            "OUTPUT_QUEUE": "gateway_results",
+            "OUTPUT_QUEUE": "transactions_final_results",
         },
         "required_environment": ["INPUT_QUEUE", "OUTPUT_QUEUE"],
     },

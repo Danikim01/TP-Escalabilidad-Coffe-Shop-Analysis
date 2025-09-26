@@ -128,30 +128,15 @@ class CoffeeShopClient:
             normalized_type = str(message_type).upper()
             if normalized_type == 'EOF':
                 logger.info("Received EOF control message from results stream")
+                self._print_results_summary()
                 return False
             if normalized_type == 'TPV_SUMMARY':
                 self._render_tpv_summary(result)
                 return True
 
         self.results_received += 1
-        self._print_results_header()
-
-        transaction_id = result.get('transaction_id', 'unknown')
-        final_amount = result.get('final_amount', 0)
-        original_amount = result.get('original_amount', 0)
-        discount_applied = result.get('discount_applied', 0)
-        created_at = result.get('created_at', 'unknown')
-
-        print(f"Resultado #{self.results_received}:")
-        print(f"  ID: {transaction_id}")
-        print(f"  Monto Final: ${final_amount}")
-        print(f"  Monto Original: ${original_amount}")
-        print(f"  Descuento: ${discount_applied}")
-        print(f"  Fecha: {created_at}")
-        print("-" * 50)
-
-        logger.info(
-            f"Resultado #{self.results_received}: {transaction_id} - ${final_amount}"
+        logger.debug(
+            "Resultado #%s contabilizado desde results stream", self.results_received
         )
 
         return True
@@ -193,6 +178,18 @@ class CoffeeShopClient:
             )
         except Exception as exc:
             logger.error(f"Failed to render TPV summary: {exc}")
+
+    def _print_results_summary(self) -> None:
+        self._print_results_header()
+        print(
+            "Total de transacciones que cumplen las condiciones: "
+            f"{self.results_received}"
+        )
+        print("-" * 50)
+        logger.info(
+            "Reported total of %s transacciones filtradas por monto al usuario",
+            self.results_received,
+        )
 
     def _handle_results_message(self, message: Any) -> bool:
         """Handle stream messages that may contain individual or batched results.

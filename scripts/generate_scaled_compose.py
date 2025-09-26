@@ -71,6 +71,19 @@ WORKER_DEFINITIONS: Dict[str, WorkerDefinition] = {
         },
         "required_environment": ["INPUT_QUEUE", "OUTPUT_QUEUE"],
     },
+    "tpv": {
+        "display_name": "TPV Aggregation Workers",
+        "base_service_name": "tpv-worker",
+        "command": ["python", "tpv_worker.py"],
+        "needs_worker_id": False,
+        "supports_prefetch": True,
+        "default_prefetch": 20,
+        "default_environment": {
+            "INPUT_QUEUE": "transactions_time_filtered_tpv",
+            "OUTPUT_QUEUE": "gateway_results",
+        },
+        "required_environment": ["INPUT_QUEUE", "OUTPUT_QUEUE"],
+    },
     "results": {
         "display_name": "Results Workers",
         "base_service_name": "results-worker",
